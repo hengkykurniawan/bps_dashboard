@@ -24,7 +24,7 @@ three feed the same cube to `docs/infer.js`.
 |---|---|---|
 | **● API BPS langsung** | every variable, every period, **always current** | your own BPS key, pasted once into Settings |
 | **● Layanan lokal** | the same, plus tidy CSVs already on your disk | `python bps_dashboard.py` running |
-| **◐ Data tersimpan** | all 37 subjects, latest period, refreshed nightly | nothing at all |
+| **◐ Contoh grafik** | a sample — up to 12 per subject, chosen to span the chart forms | nothing at all |
 
 The page picks the best source available and remembers your key, so the online
 link behaves like a normal web app after the first visit.
@@ -106,10 +106,30 @@ reading only the first few KB of each response and aborting the rest, so a
 
 ---
 
-## 📸 The no-key fallback — `bps_snapshot.py`
+## 📸 The sample — `bps_snapshot.py`
 
-So the page shows something useful before anyone enters a key, a snapshot is
-committed under `docs/data/`:
+The committed data is a **showcase, not a mirror of BPS**: up to 12 variables
+per subject (339 in total, 1.5 MB), so the page has something to show before
+anyone enters a key. Full access is the key itself — every variable, every
+period, straight from BPS.
+
+The sample is not the first 12 of each subject. Variables are bucketed by their
+shape — how many entities, categories and periods they have, which is what
+decides the chart — and taken round-robin, freshest first, so the examples span
+the chart forms the app can draw instead of repeating one. Across the 30
+subjects that have data the sample averages **5.2 distinct chart forms each**,
+and single-value variables are taken last.
+
+```bash
+python bps_snapshot.py --trim 12                       # re-cut what is on disk (no API calls)
+python bps_snapshot.py --all --per-subject 12          # rebuild, capped
+python bps_snapshot.py --all --per-subject 12 --refresh
+```
+
+`--trim` needs no key and no network: it re-ranks the cubes already committed,
+rewrites the catalogues and deletes the rest.
+
+It is committed under `docs/data/`:
 
 | File | Contents |
 |---|---|
@@ -124,9 +144,18 @@ python bps_snapshot.py --subject 530 531        # just these
 python bps_snapshot.py --subject 531 --th all   # every period, not just the latest
 ```
 
-### How the nightly refresh stays cheap
+### The scheduled refresh is currently OFF
 
-All of BPS is ~3,200 variables, so nothing rebuilds the lot every night:
+`.github/workflows/snapshot.yml` still exists and still works, but its `schedule:`
+trigger is **commented out** — the samples are a fixed showcase and do not need
+to chase BPS nightly. Run it by hand from the **Actions** tab when you want to
+re-cut them (it takes `scope`, `subjects`, `per_subject`, `budget_min` and
+`full`). To put the nightly back, uncomment the two `cron` lines.
+
+It needs one repository secret, **`BPS_KEY`** (Settings → Secrets and variables
+→ Actions). Without it the job stops with a clear message.
+
+The machinery below is what keeps a refresh cheap whenever you do run it:
 
 - **`--refresh` asks before downloading.** For each known variable it reads only
   the first few KB of the response to get `last_update`, and re-downloads the
@@ -139,15 +168,9 @@ All of BPS is ~3,200 variables, so nothing rebuilds the lot every night:
 - **Nothing is written when nothing changed.** Files are compared before writing
   and `generated` only moves when the data does, so days BPS publishes nothing
   produce no commit and no repository growth.
+- `--per-subject N` caps each subject to the N most representative variables.
 - `--max-kb` (default 900) skips cubes too big to be worth committing, and
   `--workers` sets the parallelism.
-
-**The schedule:** `.github/workflows/snapshot.yml` runs nightly at 04:00 WIB and
-commits only when something changed. It needs one repository secret named
-**`BPS_KEY`** (Settings → Secrets and variables → Actions → New repository
-secret). Without it the workflow fails with a clear message and the committed
-snapshot simply stays as it is. You can also run it by hand from the Actions
-tab, optionally for specific subjects or with a full re-download.
 
 ---
 

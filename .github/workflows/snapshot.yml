@@ -14,8 +14,13 @@ name: Refresh data snapshot
 # subjects arrive over a few days without ever hammering the BPS API.
 
 on:
-  schedule:
-    - cron: "0 21 * * *"          # nightly, 04:00 WIB
+  # The nightly schedule is OFF: the committed snapshot is a fixed set of
+  # example charts, not a mirror of BPS. Paid access is the live API key in the
+  # app, so the samples do not need to chase BPS every night. To turn the
+  # schedule back on, uncomment the two lines below.
+  #
+  # schedule:
+  #   - cron: "0 21 * * *"        # nightly, 04:00 WIB
   workflow_dispatch:
     inputs:
       scope:
@@ -26,6 +31,9 @@ on:
       subjects:
         description: "When scope=custom: subject ids (digits and spaces only)"
         default: "530 531"
+      per_subject:
+        description: "Keep only this many example variables per subject (0 = all)"
+        default: "12"
       budget_min:
         description: "Stop starting new work after this many minutes"
         default: "50"
@@ -67,11 +75,13 @@ jobs:
           SCOPE: ${{ inputs.scope || 'all' }}
           SUBJECTS: ${{ inputs.subjects || '' }}
           BUDGET: ${{ inputs.budget_min || '50' }}
+          PER_SUBJECT: ${{ inputs.per_subject || '12' }}
           FULL: ${{ inputs.full && 'yes' || 'no' }}
         run: |
           set -euo pipefail
           # inputs reach a shell, so they are validated rather than trusted
           echo "$BUDGET" | grep -Eq '^[0-9]+$' || { echo "::error::budget_min must be a number"; exit 1; }
+          echo "$PER_SUBJECT" | grep -Eq '^[0-9]+$' || { echo "::error::per_subject must be a number"; exit 1; }
           if [ "$SCOPE" = "custom" ]; then
             echo "$SUBJECTS" | grep -Eq '^[0-9]+( [0-9]+)*$' || {
               echo "::error::subjects must be digits separated by spaces"; exit 1; }
@@ -81,8 +91,8 @@ jobs:
           fi
           # a bare `[ test ] && cmd` would abort the step under `set -e`
           if [ "$FULL" = "yes" ]; then REFRESH=""; else REFRESH="--refresh"; fi
-          python bps_snapshot.py $TARGET $REFRESH --budget-min "$BUDGET" --workers 6 \
-            | tee snapshot.log
+          python bps_snapshot.py $TARGET $REFRESH --budget-min "$BUDGET" \
+            --per-subject "$PER_SUBJECT" --workers 6 | tee snapshot.log
           {
             echo "### BPS snapshot"
             echo '```'

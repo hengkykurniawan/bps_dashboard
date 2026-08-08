@@ -238,7 +238,7 @@
     var out = [];
     if (LIVE_OK) out.push(["live", "● Layanan lokal"]);
     if (BPSApi.getKey()) out.push(["direct", "● API BPS langsung"]);
-    if (CATALOG) out.push(["static", "◐ Data tersimpan"]);
+    if (CATALOG) out.push(["static", "◐ Contoh grafik"]);
     return out;
   }
 
@@ -270,11 +270,14 @@
       banner(HEALTH && !HEALTH.key_set
         ? "Belum ada kunci API BPS. Isi di tab Pengaturan, atau tulis ke file .bps_key." : "");
     } else if (CATALOG) {
-      conn.textContent = "data tersimpan · " + (CATALOG.variable_count || 0) + " variabel";
-      banner("Menampilkan data tersimpan di repositori — diperiksa tiap malam, " +
-        "data terakhir berubah " + (CATALOG.generated || "?").slice(0, 10) + ", " +
-        "periode terbaru tiap variabel. Isi kunci API BPS Anda untuk mengambil " +
-        "langsung dari BPS: seluruh variabel dan periode apa pun. ",
+      conn.textContent = "contoh · " + (CATALOG.variable_count || 0) + " grafik";
+      banner("Ini contoh: " + (CATALOG.variable_count || 0) + " grafik pilihan" +
+        (CATALOG.sample_per_subject
+          ? " (maksimal " + CATALOG.sample_per_subject + " per subjek)" : "") +
+        ", periode terbaru saat cuplikan dibuat " +
+        (CATALOG.generated || "?").slice(0, 10) + ". " +
+        "Untuk seluruh variabel BPS, periode apa pun, dan data terbaru, " +
+        "masukkan kunci API BPS Anda. ",
         { label: "Isi kunci API", fn: function () {
           document.querySelector('nav button[data-view="settings"]').click();
           setTimeout(function () { $("s-key").focus(); }, 100);
@@ -397,7 +400,7 @@
           row.type = "button";
           htm("span", "sid", row, s.id);
           htm("span", "stitle", row, s.title);
-          if (MODE === "static" && n) htm("span", "pill-ok", row, n + " grafik");
+          if (MODE === "static" && n) htm("span", "pill-ok", row, n + " contoh");
           htm("span", "scount", row, (s.ntabel || 0) + " tabel");
           row.addEventListener("click", function () { pickSubject(s, empty); });
         });
@@ -421,7 +424,7 @@
       // different situation from a subject the snapshot has not reached.
       htm("p", "muted", box, !s.ntabel
         ? "BPS belum menerbitkan tabel dinamis untuk subjek ini."
-        : "Subjek ini belum ada dalam cuplikan tersimpan. Isi kunci API BPS di " +
+        : "Belum ada contoh untuk subjek ini. Masukkan kunci API BPS di " +
           "Pengaturan untuk membukanya langsung dari BPS.");
       $("btn-check").hidden = true;
       return;

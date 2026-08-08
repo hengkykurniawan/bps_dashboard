@@ -87,6 +87,62 @@ def write_if_changed(path, obj):
     return True, len(blob.encode("utf-8"))
 
 
+_shape_cache = {}
+
+
+def shape_of(entry):
+    """Coarse (entities, categories, periods) signature of a cube: 1 / few / many.
+
+    That signature is what drives the chart choice, so sampling across
+    signatures gives a spread of chart forms without duplicating the decision
+    table (which lives in docs/infer.js)."""
+    fname = entry.get("file")
+    if fname in _shape_cache:
+        return _shape_cache[fname]
+    cube = read_json(os.path.join(DATA_DIR, fname or ""), None)
+    if not cube:
+        key = (0, 0, 0)
+    else:
+        def b(n):
+            return 0 if n <= 1 else (1 if n <= 8 else 2)
+        key = (b(len(cube.get("vervar") or [])),
+               b(len(cube.get("turvar") or [])),
+               b(len(cube.get("time") or [])))
+    _shape_cache[fname] = key
+    return key
+
+
+def choose_sample(entries, n):
+    """Keep `n` variables per subject as a showcase, not the first `n`.
+
+    Entries are bucketed by shape and taken round-robin, freshest first, so the
+    sample spans the chart forms the app can produce instead of repeating one.
+    Single-value variables (a lone stat figure) are taken last -- at most one
+    unless nothing else is left."""
+    if not n or len(entries) <= n:
+        return entries
+    buckets = {}
+    for e in entries:
+        buckets.setdefault(shape_of(e), []).append(e)
+    for k in buckets:
+        buckets[k].sort(key=lambda e: (e.get("last_update") or "", e.get("var_id", "")),
+                        reverse=True)
+    order = sorted(buckets, key=lambda k: (sum(k) == 0, -len(buckets[k]), k))
+    chosen = []
+    while len(chosen) < n:
+        progressed = False
+        for k in order:
+            if buckets[k]:
+                chosen.append(buckets[k].pop(0))
+                progressed = True
+                if len(chosen) >= n:
+                    break
+        if not progressed:
+            break
+    chosen.sort(key=lambda e: int(e["var_id"]) if e["var_id"].isdigit() else 0)
+    return chosen
+
+
 class Budget:
     def __init__(self, minutes):
         self.deadline = time.time() + minutes * 60 if minutes else None
@@ -145,11 +201,74 @@ def process_var(v, prev, args, budget):
     return ("written" if changed else "kept", entry)
 
 
+def trim_existing(n, keep_files=False):
+    """Cut the committed snapshot down to `n` variables per subject, working
+    only on what is already in docs/data/ -- no key and no API calls needed."""
+    index = read_json(os.path.join(DATA_DIR, "index.json"), None)
+    if not index:
+        sys.exit("No snapshot to trim: docs/data/index.json is missing.")
+
+    kept_total, dropped_total = 0, 0
+    for s in index["subjects"]:
+        sid = str(s["id"])
+        cat_path = os.path.join(DATA_DIR, f"subject{sid}.json")
+        entries = read_json(cat_path, None)
+        if not entries:
+            s["count"] = 0
+            s["file"] = None
+            continue
+        chosen = choose_sample(entries, n)
+        dropped = len(entries) - len(chosen)
+        kept_total += len(chosen)
+        dropped_total += dropped
+        write_if_changed(cat_path, chosen)
+        s["count"] = len(chosen)
+        s["file"] = f"subject{sid}.json"
+        shapes = sorted({shape_of(e) for e in chosen})
+        say(f"  subject {sid:<4} {len(chosen):>3} kept, {dropped:>4} dropped  "
+            f"({len(shapes)} chart shapes)")
+
+    index["variable_count"] = kept_total
+    index["sample_per_subject"] = n
+    index["generated"] = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    index["note"] = ("Contoh grafik yang ikut tersimpan di repositori. "
+                     "Masukkan kunci API BPS di aplikasi untuk seluruh variabel "
+                     "dan periode, langsung dari BPS.")
+    write_if_changed(os.path.join(DATA_DIR, "index.json"), index)
+
+    removed = 0
+    if not keep_files:
+        keep = {"index.json"}
+        for s in index["subjects"]:
+            if not s.get("file"):
+                continue
+            keep.add(s["file"])
+            for e in read_json(os.path.join(DATA_DIR, s["file"]), []) or []:
+                keep.add(e["file"])
+        for fn in os.listdir(DATA_DIR):
+            if fn.endswith(".json") and fn not in keep:
+                os.remove(os.path.join(DATA_DIR, fn))
+                removed += 1
+
+    size = sum(os.path.getsize(os.path.join(DATA_DIR, f))
+               for f in os.listdir(DATA_DIR)) / 1024
+    say(f"\nTrimmed to {n} per subject: {kept_total} variables kept, "
+        f"{dropped_total} dropped, {removed} cube file(s) deleted.")
+    say(f"docs/data/ is now {size / 1024:.1f} MB across "
+        f"{len(os.listdir(DATA_DIR))} files.")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Build the static snapshot for GitHub Pages.")
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--subject", nargs="+", help="subject id(s) to snapshot")
     src.add_argument("--all", action="store_true", help="every BPS subject")
+    src.add_argument("--trim", type=int, metavar="N",
+                     help="re-apply a per-subject cap to the snapshot already on "
+                          "disk and delete the rest; no API calls at all")
+    ap.add_argument("--per-subject", type=int, default=0, metavar="N",
+                    help="keep only N variables per subject (0 = all), chosen "
+                         "for a spread of chart shapes, freshest first")
     ap.add_argument("--th", default="latest", choices=["latest", "all"])
     ap.add_argument("--limit", type=int, default=0, help="max variables per subject")
     ap.add_argument("--max-kb", type=int, default=DEFAULT_MAX_KB,
@@ -166,6 +285,8 @@ def main():
 
     api.SETTINGS["domain"] = args.domain
     api.SETTINGS["lang"] = args.lang
+    if args.trim:
+        return trim_existing(args.trim, args.keep)
     if args.refresh:
         api.CACHE_TTL = 0          # a refresh must not read yesterday's cache
     if not api.load_key():
@@ -226,9 +347,14 @@ def main():
                     entries.append(entry)
                 if status == "written":
                     changed_files += 1
+        entries.sort(key=lambda e: int(e["var_id"]) if e["var_id"].isdigit() else 0)
+        if args.per_subject:
+            before = len(entries)
+            entries = choose_sample(entries, args.per_subject)
+            if before != len(entries):
+                counts["sampled-out"] = before - len(entries)
         for k, n in counts.items():
             stats[k] = stats.get(k, 0) + n
-        entries.sort(key=lambda e: int(e["var_id"]) if e["var_id"].isdigit() else 0)
         if entries:
             catalogs[sid] = entries
             if write_if_changed(cat_path, entries)[0]:
