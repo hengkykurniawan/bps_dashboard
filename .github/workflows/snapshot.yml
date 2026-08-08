@@ -1,33 +1,50 @@
 name: Refresh data snapshot
 
-# Rebuilds docs/data/ from webapi.bps.go.id and commits it, so the published
-# site keeps showing current numbers without anyone running anything locally.
+# Keeps docs/data/ current for the published site: every night it asks BPS
+# which variables changed and re-downloads only those, then commits. Quiet
+# nights produce no commit at all.
 #
 # Requires one repository secret: BPS_KEY (Settings -> Secrets and variables ->
 # Actions -> New repository secret). The key is written to .bps_key for the
 # duration of the run, is never committed (.gitignore) and never reaches the
-# published page -- the browser only ever sees the resulting JSON.
+# published page.
+#
+# The first runs fill the snapshot in from scratch, a slice per night
+# (--budget-min stops the job cleanly and the next one continues), so all 37
+# subjects arrive over a few days without ever hammering the BPS API.
 
 on:
   schedule:
-    - cron: "0 22 * * 0"        # Mondays 05:00 WIB
+    - cron: "0 21 * * *"          # nightly, 04:00 WIB
   workflow_dispatch:
     inputs:
-      subjects:
-        description: "Subject ids to snapshot (digits and spaces only)"
-        default: "520 530 531"
-      th:
-        description: "Periods per variable"
-        default: "latest"
+      scope:
+        description: "Subjects to process"
+        default: "all"
         type: choice
-        options: ["latest", "all"]
+        options: ["all", "custom"]
+      subjects:
+        description: "When scope=custom: subject ids (digits and spaces only)"
+        default: "530 531"
+      budget_min:
+        description: "Stop starting new work after this many minutes"
+        default: "50"
+      full:
+        description: "Re-download everything instead of only what BPS revised"
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
+concurrency:
+  group: bps-snapshot            # never let two runs write docs/data at once
+  cancel-in-progress: false
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -45,25 +62,44 @@ jobs:
           fi
           printf '%s' "$BPS_KEY" > .bps_key
 
-      - name: Build the snapshot
+      - name: Refresh the snapshot
         env:
-          SUBJECTS: ${{ inputs.subjects || '520 530 531' }}
-          TH: ${{ inputs.th || 'latest' }}
+          SCOPE: ${{ inputs.scope || 'all' }}
+          SUBJECTS: ${{ inputs.subjects || '' }}
+          BUDGET: ${{ inputs.budget_min || '50' }}
+          FULL: ${{ inputs.full && 'yes' || 'no' }}
         run: |
-          # the input reaches a shell, so it is validated rather than trusted
-          echo "$SUBJECTS" | grep -Eq '^[0-9]+( [0-9]+)*$' || {
-            echo "::error::subjects must be digits separated by spaces"; exit 1; }
-          python bps_snapshot.py --subject $SUBJECTS --th "$TH"
+          set -euo pipefail
+          # inputs reach a shell, so they are validated rather than trusted
+          echo "$BUDGET" | grep -Eq '^[0-9]+$' || { echo "::error::budget_min must be a number"; exit 1; }
+          if [ "$SCOPE" = "custom" ]; then
+            echo "$SUBJECTS" | grep -Eq '^[0-9]+( [0-9]+)*$' || {
+              echo "::error::subjects must be digits separated by spaces"; exit 1; }
+            TARGET="--subject $SUBJECTS"
+          else
+            TARGET="--all"
+          fi
+          # a bare `[ test ] && cmd` would abort the step under `set -e`
+          if [ "$FULL" = "yes" ]; then REFRESH=""; else REFRESH="--refresh"; fi
+          python bps_snapshot.py $TARGET $REFRESH --budget-min "$BUDGET" --workers 6 \
+            | tee snapshot.log
+          {
+            echo "### BPS snapshot"
+            echo '```'
+            tail -n 6 snapshot.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Commit if anything changed
         run: |
-          rm -f .bps_key
+          rm -f .bps_key snapshot.log
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git diff --quiet -- docs/data; then
             echo "Snapshot unchanged; nothing to commit."
           else
+            n=$(git diff --name-only -- docs/data | wc -l)
             git add docs/data
-            git commit -m "Refresh BPS data snapshot ($(date -u +%Y-%m-%d))"
+            git commit -m "Refresh BPS data snapshot: $n file(s) ($(date -u +%Y-%m-%d))"
             git push
           fi

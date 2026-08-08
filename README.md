@@ -24,7 +24,7 @@ three feed the same cube to `docs/infer.js`.
 |---|---|---|
 | **● API BPS langsung** | every variable, every period, **always current** | your own BPS key, pasted once into Settings |
 | **● Layanan lokal** | the same, plus tidy CSVs already on your disk | `python bps_dashboard.py` running |
-| **◐ Data tersimpan** | the snapshotted subjects, as of the last refresh | nothing at all |
+| **◐ Data tersimpan** | all 37 subjects, latest period, refreshed nightly | nothing at all |
 
 The page picks the best source available and remembers your key, so the online
 link behaves like a normal web app after the first visit.
@@ -109,27 +109,45 @@ reading only the first few KB of each response and aborting the rest, so a
 ## 📸 The no-key fallback — `bps_snapshot.py`
 
 So the page shows something useful before anyone enters a key, a snapshot is
-committed under `docs/data/`: `index.json` (all 37 subjects, the snapshotted
-variables, and their update dates) plus one cube per variable. Rebuild or extend
-it with:
+committed under `docs/data/`:
+
+| File | Contents |
+|---|---|
+| `index.json` | all 37 subjects, with how many variables each has in the snapshot — small, loaded on every visit |
+| `subject<ID>.json` | that subject's variables and their update dates — loaded when the subject is opened |
+| `var<ID>.json` | one cube per variable |
 
 ```bash
-python bps_snapshot.py --subject 530 531           # snapshot two subjects
-python bps_snapshot.py --subject 520 --limit 45     # add another, incrementally
-python bps_snapshot.py --subject 531 --th all       # every period, not just the latest
+python bps_snapshot.py --all --refresh          # the nightly job
+python bps_snapshot.py --all --budget-min 30    # bounded fill
+python bps_snapshot.py --subject 530 531        # just these
+python bps_snapshot.py --subject 531 --th all   # every period, not just the latest
 ```
 
-Runs merge, so subjects can be added one at a time; cubes no longer referenced
-are pruned (`--keep` disables that), and anything bigger than `--max-kb`
-(default 900) is skipped so the repository stays small. The current snapshot is
-~1 MB for 117 variables.
+### How the nightly refresh stays cheap
 
-**Automatic weekly refresh:** `.github/workflows/snapshot.yml` runs the same
-command in CI and commits the result. It needs one repository secret named
-**`BPS_KEY`** (Settings → Secrets and variables → Actions). Without it the
-workflow fails with a clear message and the committed snapshot simply stays as
-it is. Edit the `subjects` default in that file to change what gets published,
-or run it by hand from the Actions tab.
+All of BPS is ~3,200 variables, so nothing rebuilds the lot every night:
+
+- **`--refresh` asks before downloading.** For each known variable it reads only
+  the first few KB of the response to get `last_update`, and re-downloads the
+  cube only if BPS actually revised it. A quiet night costs a few KB per
+  variable instead of megabytes.
+- **New variables are always fetched**, so subjects BPS adds appear on their own.
+- **`--budget-min` stops the run cleanly** and the next one continues where it
+  left off — subjects with nothing snapshotted are processed first, so the
+  initial fill spreads over a few nights instead of one enormous job.
+- **Nothing is written when nothing changed.** Files are compared before writing
+  and `generated` only moves when the data does, so days BPS publishes nothing
+  produce no commit and no repository growth.
+- `--max-kb` (default 900) skips cubes too big to be worth committing, and
+  `--workers` sets the parallelism.
+
+**The schedule:** `.github/workflows/snapshot.yml` runs nightly at 04:00 WIB and
+commits only when something changed. It needs one repository secret named
+**`BPS_KEY`** (Settings → Secrets and variables → Actions → New repository
+secret). Without it the workflow fails with a clear message and the committed
+snapshot simply stays as it is. You can also run it by hand from the Actions
+tab, optionally for specific subjects or with a full re-download.
 
 ---
 

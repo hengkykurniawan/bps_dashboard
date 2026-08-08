@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
 """
-Build the static data snapshot the published site runs on.
+Build and refresh the static data snapshot the published site runs on.
 
-The GitHub Pages build has no server and must never hold the BPS API key, so
-the data it charts is fetched here (with the key, locally or in CI) and
+The GitHub Pages build must work with no server and no key, so the data it
+charts is fetched here -- locally, or by .github/workflows/snapshot.yml -- and
 committed as plain JSON under `docs/data/`:
 
-    docs/data/index.json    the catalogue: subjects, variables, file names
-    docs/data/var<ID>.json  one cube per variable
+    docs/data/index.json       catalogue of all 37 subjects (small; loaded first)
+    docs/data/subject<ID>.json the variables of one subject (loaded on demand)
+    docs/data/var<ID>.json     one cube per variable
 
-The browser then does everything else -- docs/infer.js picks the chart from the
-cube exactly as it does for the live service, so the online site and the local
-app behave identically. Anything not snapshotted stays available by running
-`python bps_dashboard.py` locally.
+Covering all of BPS is ~3,200 variables, so a nightly job never rebuilds
+everything. In `--refresh` mode each known variable is checked with a partial
+read of its `last_update` (a few KB) and re-downloaded only when BPS actually
+revised it; variables that are new are always fetched. A run that hits
+`--budget-min` stops cleanly and the next one picks up where it left off, so
+the first full fill can spread over a few nights.
 
-    python bps_snapshot.py --subject 530 531
-    python bps_snapshot.py --subject 531 --limit 20 --th all
-    python bps_snapshot.py --subject 531 --max-kb 400   # skip huge cubes
+    python bps_snapshot.py --all --refresh          # the nightly job
+    python bps_snapshot.py --all --budget-min 30    # bounded first fill
+    python bps_snapshot.py --subject 530 531        # just these
+    python bps_snapshot.py --subject 531 --th all   # every period, not just latest
 
-Re-running rewrites the snapshot: cubes no longer referenced are removed unless
---keep is given. Python 3 standard library only.
+Nothing is written when nothing changed, so the repository gets a commit only
+on days BPS actually published something. Python 3 standard library only.
 """
 
 import argparse
@@ -27,12 +31,22 @@ import datetime
 import json
 import os
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import bps_api as api
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, "docs", "data")
 DEFAULT_MAX_KB = 900
+
+_print_lock = threading.Lock()
+
+
+def say(msg):
+    with _print_lock:
+        print(msg, flush=True)
 
 
 def round_cube(cube, places=4):
@@ -47,145 +61,243 @@ def round_cube(cube, places=4):
     return cube
 
 
-def fetch_cube(var, th):
-    cube = api.get_cube(var, th)
-    if not cube.get("time"):
-        return None
-    return round_cube(cube)
+def read_json(path, default=None):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def write_if_changed(path, obj):
+    """Write only when the bytes differ, so untouched data keeps its git blob
+    and the nightly job produces an empty diff on quiet days."""
+    blob = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+    old = None
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                old = f.read()
+        except OSError:
+            old = None
+    if old == blob:
+        return False, len(blob.encode("utf-8"))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(blob)
+    return True, len(blob.encode("utf-8"))
+
+
+class Budget:
+    def __init__(self, minutes):
+        self.deadline = time.time() + minutes * 60 if minutes else None
+        self.hit = False
+
+    def spent(self):
+        if self.deadline and time.time() > self.deadline:
+            self.hit = True
+        return self.hit
+
+
+def process_var(v, prev, args, budget):
+    """One variable -> (status, entry). Statuses: kept, written, empty, error,
+    skipped-big, budget."""
+    var = str(v["var_id"])
+    fname = f"var{var}.json"
+    path = os.path.join(DATA_DIR, fname)
+
+    if budget.spent():
+        return ("budget", prev if prev and os.path.exists(path) else None)
+
+    # Cheap check first: if BPS has not revised it, keep the committed cube.
+    if args.refresh and prev and prev.get("th") and os.path.exists(path):
+        try:
+            when = api.fetch_last_update(var, prev["th"])
+        except Exception:
+            when = None
+        if when and when == prev.get("last_update"):
+            return ("kept", prev)
+
+    try:
+        years = api.get_years(var)
+        if not years:
+            return ("empty", None)
+        ths = [str(y["th_id"]) for y in years] if args.th == "all" \
+            else [str(years[-1]["th_id"])]
+        cube = api.get_cube(var, ths)
+        if not cube.get("time"):
+            return ("empty", None)
+        round_cube(cube)
+    except Exception as e:
+        say(f"    var {var}: {e}")
+        return ("error", prev if prev and os.path.exists(path) else None)
+
+    blob_kb = len(json.dumps(cube, ensure_ascii=False,
+                             separators=(",", ":")).encode("utf-8")) / 1024
+    if blob_kb > args.max_kb:
+        return ("skipped-big", None)
+
+    changed, size = write_if_changed(path, cube)
+    entry = {"var_id": var, "title": cube["title"] or v["title"],
+             "unit": cube["unit"], "file": fname,
+             "periods": len(cube["time"]),
+             "last_update": cube.get("last_update") or "",
+             "th": ths[-1], "kb": round(size / 1024, 1)}
+    return ("written" if changed else "kept", entry)
 
 
 def main():
     ap = argparse.ArgumentParser(description="Build the static snapshot for GitHub Pages.")
-    ap.add_argument("--subject", nargs="+", required=True,
-                    help="subject id(s) to snapshot (e.g. 530 531)")
-    ap.add_argument("--th", default="latest", choices=["latest", "all"],
-                    help="'latest' period only (default) or every period")
-    ap.add_argument("--limit", type=int, default=0,
-                    help="max variables per subject (0 = all)")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--subject", nargs="+", help="subject id(s) to snapshot")
+    src.add_argument("--all", action="store_true", help="every BPS subject")
+    ap.add_argument("--th", default="latest", choices=["latest", "all"])
+    ap.add_argument("--limit", type=int, default=0, help="max variables per subject")
     ap.add_argument("--max-kb", type=int, default=DEFAULT_MAX_KB,
                     help=f"skip cubes larger than this (default {DEFAULT_MAX_KB} KB)")
-    ap.add_argument("--keep", action="store_true",
-                    help="keep cube files that are no longer referenced")
+    ap.add_argument("--refresh", action="store_true",
+                    help="re-download only variables BPS has revised")
+    ap.add_argument("--workers", type=int, default=6, help="parallel requests")
+    ap.add_argument("--budget-min", type=float, default=0,
+                    help="stop starting new work after this many minutes")
+    ap.add_argument("--keep", action="store_true", help="keep unreferenced cube files")
     ap.add_argument("--domain", default="0000")
     ap.add_argument("--lang", default="ind")
     args = ap.parse_args()
 
     api.SETTINGS["domain"] = args.domain
     api.SETTINGS["lang"] = args.lang
+    if args.refresh:
+        api.CACHE_TTL = 0          # a refresh must not read yesterday's cache
     if not api.load_key():
         sys.exit("No API key: put it in .bps_key next to this script "
                  "(in CI, write the BPS_KEY secret to that file).")
 
     os.makedirs(DATA_DIR, exist_ok=True)
-    all_subjects = {str(s["id"]): s for s in api.get_subjects()}
-    total_variables = sum(int(s.get("ntabel") or 0) for s in all_subjects.values())
+    started = time.time()
+    budget = Budget(args.budget_min)
 
-    # Merge with whatever is already snapshotted, so subjects can be added one
-    # run at a time without wiping the previous ones.
-    index_path = os.path.join(DATA_DIR, "index.json")
-    prev = {}
-    if os.path.exists(index_path):
-        try:
-            with open(index_path, encoding="utf-8") as f:
-                prev = json.load(f)
-        except (OSError, ValueError):
-            prev = {}
-    catalog = dict(prev.get("vars") or {})
-    for sid in list(catalog):
-        if str(sid) in {str(x) for x in args.subject}:
-            catalog.pop(sid)
+    all_subjects = api.get_subjects()
+    by_id = {str(s["id"]): s for s in all_subjects}
+    targets = [str(s["id"]) for s in all_subjects] if args.all \
+        else [str(x) for x in args.subject]
+    targets = [t for t in targets if t in by_id]
 
-    # Every BPS subject is listed, not just the snapshotted ones, so the page
-    # shows the same catalogue as the BPS site; subjects without cubes are
-    # marked in the UI and open with a key.
-    subjects = [{"id": str(s["id"]), "title": s["title"], "subcat": s["subcat"],
-                 "ntabel": s.get("ntabel")}
-                for s in all_subjects.values()]
-    updates = dict(prev.get("updates") or {})
-    written, skipped = [], []
-    for sid in args.subject:
-        sid = str(sid)
-        subj = all_subjects.get(sid)
-        if not subj:
-            print(f"subject {sid}: not found, skipped")
+    prev_index = read_json(os.path.join(DATA_DIR, "index.json"), {}) or {}
+    prev_counts = {str(s["id"]): s.get("count", 0)
+                   for s in (prev_index.get("subjects") or [])}
+
+    # Subjects already filled are refreshed after the untouched ones, so a
+    # budgeted first fill reaches new ground every night.
+    targets.sort(key=lambda sid: (prev_counts.get(sid, 0) > 0, sid))
+
+    catalogs, changed_files, stats = {}, 0, {}
+    for pos, sid in enumerate(targets, 1):
+        subj = by_id[sid]
+        cat_path = os.path.join(DATA_DIR, f"subject{sid}.json")
+        prev_entries = {e["var_id"]: e for e in (read_json(cat_path, []) or [])}
+
+        if budget.spent():
+            if prev_entries:
+                catalogs[sid] = list(prev_entries.values())
             continue
-        variables = api.get_vars(sid)
+
+        try:
+            variables = api.get_vars(sid)
+        except Exception as e:
+            say(f"[{pos}/{len(targets)}] subject {sid}: {e}")
+            if prev_entries:
+                catalogs[sid] = list(prev_entries.values())
+            continue
         if args.limit:
             variables = variables[:args.limit]
-        print(f"\nsubject {sid} — {subj['title']}: {len(variables)} variables")
+
+        say(f"[{pos}/{len(targets)}] subject {sid} — {subj['title']}: "
+            f"{len(variables)} variables")
+
+        counts = {}
         entries = []
-        for i, v in enumerate(variables, 1):
-            var = str(v["var_id"])
-            try:
-                cube = fetch_cube(var, args.th)
-            except Exception as e:
-                print(f"  [{i}/{len(variables)}] var {var}: {e}")
-                skipped.append((var, str(e)))
-                continue
-            if not cube:
-                print(f"  [{i}/{len(variables)}] var {var}: no data, skipped")
-                skipped.append((var, "no data"))
-                continue
-            blob = json.dumps(cube, ensure_ascii=False, separators=(",", ":"))
-            kb = len(blob.encode("utf-8")) / 1024
-            if kb > args.max_kb:
-                print(f"  [{i}/{len(variables)}] var {var}: {kb:.0f} KB > "
-                      f"{args.max_kb} KB, skipped")
-                skipped.append((var, f"{kb:.0f} KB"))
-                continue
-            fname = f"var{var}.json"
-            with open(os.path.join(DATA_DIR, fname), "w", encoding="utf-8") as f:
-                f.write(blob)
-            entries.append({"var_id": var, "title": cube["title"] or v["title"],
-                            "unit": cube["unit"], "file": fname,
-                            "periods": len(cube["time"]),
-                            "last_update": cube.get("last_update") or ""})
-            if cube.get("last_update"):
-                updates[var] = cube["last_update"]
-            written.append(fname)
-            n_cells = len(cube["vervar"]) * len(cube["turvar"]) * len(cube["time"])
-            print(f"  [{i}/{len(variables)}] var {var}: {kb:6.0f} KB  "
-                  f"{n_cells:>7,} cells  {cube['title'][:46]}")
+        with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+            results = pool.map(
+                lambda v: process_var(v, prev_entries.get(str(v["var_id"])), args, budget),
+                variables)
+            for status, entry in results:
+                counts[status] = counts.get(status, 0) + 1
+                if entry:
+                    entries.append(entry)
+                if status == "written":
+                    changed_files += 1
+        for k, n in counts.items():
+            stats[k] = stats.get(k, 0) + n
+        entries.sort(key=lambda e: int(e["var_id"]) if e["var_id"].isdigit() else 0)
         if entries:
-            catalog[sid] = entries
+            catalogs[sid] = entries
+            if write_if_changed(cat_path, entries)[0]:
+                changed_files += 1
+        say("    " + ", ".join(f"{k}={n}" for k, n in sorted(counts.items())) +
+            f"  ({len(entries)} in catalogue)")
+        if budget.spent():
+            say(f"    budget of {args.budget_min} min reached — stopping here; "
+                "the next run continues.")
 
-    if not written and not catalog:
-        sys.exit("\nNothing snapshotted; index left unchanged.")
+    # subjects not touched this run keep whatever they already had
+    for sid in by_id:
+        if sid not in catalogs:
+            prev = read_json(os.path.join(DATA_DIR, f"subject{sid}.json"), None)
+            if prev:
+                catalogs[sid] = prev
 
-    subjects.sort(key=lambda s: (s["subcat"] or "", str(s["id"])))
+    subjects = []
+    for s in all_subjects:
+        sid = str(s["id"])
+        subjects.append({"id": sid, "title": s["title"], "subcat": s["subcat"],
+                         "ntabel": s.get("ntabel"),
+                         "count": len(catalogs.get(sid, [])),
+                         "file": f"subject{sid}.json" if catalogs.get(sid) else None})
+    subjects.sort(key=lambda s: (s["subcat"] or "", s["id"]))
+
     index = {
-        "generated": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "subjects": subjects,
+        "variable_count": sum(len(v) for v in catalogs.values()),
+        "total_variables": sum(int(s.get("ntabel") or 0) for s in all_subjects),
         "th": args.th, "domain": args.domain, "lang": args.lang,
-        "subjects": subjects, "vars": catalog,
-        "updates": {k: v for k, v in updates.items()
-                    if any(e["var_id"] == k for es in catalog.values() for e in es)},
-        "variable_count": sum(len(v) for v in catalog.values()),
-        "total_variables": total_variables,
-        "note": "Snapshot for the GitHub Pages build. Run bps_dashboard.py "
-                "locally for every BPS variable and period.",
+        "note": "Snapshot for the GitHub Pages build, refreshed daily. Enter a "
+                "BPS API key in the app for everything, always current.",
     }
-    with open(index_path, "w", encoding="utf-8") as f:
-        json.dump(index, f, ensure_ascii=False, separators=(",", ":"))
+    # `generated` marks when the DATA last changed, not when the job last ran,
+    # so a quiet night produces no commit at all.
+    prev_body = dict(prev_index)
+    prev_gen = prev_body.pop("generated", None)
+    if changed_files == 0 and prev_body == index and prev_gen:
+        index["generated"] = prev_gen
+    else:
+        index["generated"] = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    if write_if_changed(os.path.join(DATA_DIR, "index.json"), index)[0]:
+        changed_files += 1
 
+    removed = 0
     if not args.keep:
         keep = {"index.json"}
-        for entries in catalog.values():
+        for sid, entries in catalogs.items():
+            keep.add(f"subject{sid}.json")
             for e in entries:
                 keep.add(e["file"])
         for fn in os.listdir(DATA_DIR):
             if fn.endswith(".json") and fn not in keep:
                 os.remove(os.path.join(DATA_DIR, fn))
-                print(f"removed stale {fn}")
+                removed += 1
+    if removed:
+        say(f"removed {removed} unreferenced file(s)")
 
     size = sum(os.path.getsize(os.path.join(DATA_DIR, f))
                for f in os.listdir(DATA_DIR)) / 1024
-    print(f"\nSnapshot: {index['variable_count']} variables across "
-          f"{len(subjects)} subjects ({len(written)} written this run), "
-          f"{size:.0f} KB total in docs/data/")
-    if skipped:
-        print(f"skipped {len(skipped)}: " +
-              ", ".join(f"{v} ({why})" for v, why in skipped[:8]) +
-              (" …" if len(skipped) > 8 else ""))
+    mins = (time.time() - started) / 60
+    say(f"\nSnapshot: {index['variable_count']} variables across "
+        f"{sum(1 for s in subjects if s['count'])} of {len(subjects)} subjects, "
+        f"{size / 1024:.1f} MB in docs/data/  ({mins:.1f} min)")
+    say("this run: " + (", ".join(f"{k}={n}" for k, n in sorted(stats.items())) or "nothing")
+        + f"; files changed: {changed_files}")
+    if budget.hit:
+        say("budget reached — rerun (or wait for the nightly job) to continue.")
 
 
 if __name__ == "__main__":

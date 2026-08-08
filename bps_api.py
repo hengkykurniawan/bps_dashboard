@@ -203,6 +203,42 @@ def fetch_data(var, th, domain=None, lang=None):
     return api(url)
 
 
+_LU_RE = re.compile(rb'"last_update"\s*:\s*"([^"]*)"')
+
+
+def fetch_last_update(var, th, domain=None, lang=None, retries=2):
+    """Read only the first few KB of a data response to get `last_update`.
+
+    It sits near the top of the JSON, so a daily "has this changed?" sweep over
+    every BPS variable costs a few KB each instead of the whole cube. Never
+    cached -- staleness is the one thing this must not report."""
+    key = load_key()
+    domain = domain or SETTINGS["domain"]
+    lang = lang or SETTINGS["lang"]
+    url = (f"{BASE}/list/model/data/lang/{lang}/domain/{domain}"
+           f"/var/{var}/th/{th}/key/{key}/")
+    for attempt in range(retries):
+        buf = b""
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                for _ in range(8):                      # up to ~8 KB
+                    chunk = r.read(1024)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    m = _LU_RE.search(buf)
+                    if m:
+                        return m.group(1).decode("utf-8", "replace")
+        except Exception:
+            time.sleep(1.0 * (attempt + 1))
+            continue
+        m = _LU_RE.search(buf)
+        if m:
+            return m.group(1).decode("utf-8", "replace")
+    return None
+
+
 def decode_rows(d):
     """Reconstruct every cell of the BPS data cube into tidy rows.
     key = [vervar][var][turvar][tahun][turtahun] -> value in `datacontent`."""
