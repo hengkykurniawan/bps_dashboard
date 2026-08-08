@@ -48,16 +48,10 @@ def round_cube(cube, places=4):
 
 
 def fetch_cube(var, th):
-    years = api.get_years(var)
-    if not years:
+    cube = api.get_cube(var, th)
+    if not cube.get("time"):
         return None
-    ths = [str(y["th_id"]) for y in years] if th == "all" else [str(years[-1]["th_id"])]
-    rows = []
-    for t in ths:
-        rows += api.decode_rows(api.fetch_data(var, t))
-    if not rows:
-        return None
-    return round_cube(api.to_cube(rows))
+    return round_cube(cube)
 
 
 def main():
@@ -97,12 +91,17 @@ def main():
         except (OSError, ValueError):
             prev = {}
     catalog = dict(prev.get("vars") or {})
-    subjects = [s for s in (prev.get("subjects") or [])
-                if str(s["id"]) not in {str(x) for x in args.subject}]
     for sid in list(catalog):
         if str(sid) in {str(x) for x in args.subject}:
             catalog.pop(sid)
 
+    # Every BPS subject is listed, not just the snapshotted ones, so the page
+    # shows the same catalogue as the BPS site; subjects without cubes are
+    # marked in the UI and open with a key.
+    subjects = [{"id": str(s["id"]), "title": s["title"], "subcat": s["subcat"],
+                 "ntabel": s.get("ntabel")}
+                for s in all_subjects.values()]
+    updates = dict(prev.get("updates") or {})
     written, skipped = [], []
     for sid in args.subject:
         sid = str(sid)
@@ -139,24 +138,27 @@ def main():
                 f.write(blob)
             entries.append({"var_id": var, "title": cube["title"] or v["title"],
                             "unit": cube["unit"], "file": fname,
-                            "periods": len(cube["time"])})
+                            "periods": len(cube["time"]),
+                            "last_update": cube.get("last_update") or ""})
+            if cube.get("last_update"):
+                updates[var] = cube["last_update"]
             written.append(fname)
             n_cells = len(cube["vervar"]) * len(cube["turvar"]) * len(cube["time"])
             print(f"  [{i}/{len(variables)}] var {var}: {kb:6.0f} KB  "
                   f"{n_cells:>7,} cells  {cube['title'][:46]}")
         if entries:
             catalog[sid] = entries
-            subjects.append({"id": sid, "title": subj["title"],
-                             "subcat": subj["subcat"], "ntabel": subj.get("ntabel")})
 
     if not written and not catalog:
         sys.exit("\nNothing snapshotted; index left unchanged.")
 
-    subjects.sort(key=lambda s: str(s["id"]))
+    subjects.sort(key=lambda s: (s["subcat"] or "", str(s["id"])))
     index = {
         "generated": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         "th": args.th, "domain": args.domain, "lang": args.lang,
         "subjects": subjects, "vars": catalog,
+        "updates": {k: v for k, v in updates.items()
+                    if any(e["var_id"] == k for es in catalog.values() for e in es)},
         "variable_count": sum(len(v) for v in catalog.values()),
         "total_variables": total_variables,
         "note": "Snapshot for the GitHub Pages build. Run bps_dashboard.py "

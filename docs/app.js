@@ -1,28 +1,30 @@
 /* BPS Dashboard - UI.
  *
- * Two data sources, one code path:
+ * Three data sources, one code path. Whichever is active, the browser ends up
+ * with the same cube and docs/infer.js decides the chart, so they behave
+ * identically:
  *
- *   live   - the local Python service (bps_dashboard.py) holds the API key and
- *            calls webapi.bps.go.id. Every one of BPS's ~1,700 variables, any
- *            period, always current.
+ *   direct - the browser calls webapi.bps.go.id itself with the visitor's own
+ *            key (docs/bps-api.js). Every variable, every period, always
+ *            current -- and it needs no server at all.
+ *   live   - the local Python service holds the key on disk and makes the
+ *            calls. Same coverage; preferred on a shared machine.
  *   static - JSON cubes committed under docs/data/, refreshed by a scheduled
- *            GitHub Action. No key, no local machine; only what was snapshotted.
- *
- * Either way the browser receives the same cube and docs/infer.js decides the
- * chart, so both modes behave identically.
+ *            GitHub Action. No key needed; covers the snapshotted subjects.
  */
 (function () {
   "use strict";
 
   var LOCAL = "http://127.0.0.1:8766";
-  var SELF_HOSTED = location.port === "8766" ||
-    /^(127\.0\.0\.1|localhost)$/.test(location.hostname) && location.protocol !== "file:";
+  var SELF_HOSTED = location.port === "8766";
   var API = SELF_HOSTED ? "" : LOCAL;
   var DATA = "data/";
 
-  var MODE = "live";          // "live" | "static"
-  var CATALOG = null;         // static catalog, when docs/data/index.json exists
+  var MODE = "static";
+  var CATALOG = null;
   var LIVE_OK = false;
+  var HEALTH = null;
+  var SET = { domain: "0000", lang: "ind" };
 
   var $ = function (id) { return document.getElementById(id); };
 
@@ -76,34 +78,110 @@
       .replace(/^-|-$/g, "").slice(0, 60) || "chart";
   }
 
+  try {
+    var st = JSON.parse(localStorage.getItem("bps-settings") || "{}");
+    if (st.domain) SET.domain = st.domain;
+    if (st.lang) SET.lang = st.lang;
+  } catch (e) { }
+
+  function saveSettings() {
+    try { localStorage.setItem("bps-settings", JSON.stringify(SET)); } catch (e) { }
+  }
+
+  // ---------------------------------------------------------------- updated badge
+
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
+    "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+
+  function parseWhen(s) {
+    if (!s) return null;
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s));
+    if (!m) return null;
+    return new Date(+m[1], +m[2] - 1, +m[3]);
+  }
+
+  function daysAgo(s) {
+    var d = parseWhen(s);
+    if (!d) return null;
+    return Math.floor((Date.now() - d.getTime()) / 86400000);
+  }
+
+  function whenLabel(s) {
+    var d = parseWhen(s);
+    if (!d) return "";
+    return d.getDate() + " " + MONTHS[d.getMonth()] + " " + d.getFullYear();
+  }
+
+  /* Freshness badge for one variable: date plus how long ago, tinted when the
+     figure was revised recently. */
+  function updateBadge(parent, when, opts) {
+    if (!when) return null;
+    opts = opts || {};
+    var n = daysAgo(when);
+    var cls = "badge";
+    if (n !== null && n <= 30) cls += " badge-fresh";
+    else if (n !== null && n <= 180) cls += " badge-warm";
+    var b = htm("span", cls, parent);
+    var text = whenLabel(when);
+    if (opts.long) text = "diperbarui " + text;
+    if (n !== null) {
+      text += n === 0 ? " · hari ini"
+        : n < 30 ? " · " + n + " hari lalu"
+          : n < 365 ? " · " + Math.round(n / 30) + " bln lalu"
+            : " · " + Math.floor(n / 365) + " thn lalu";
+    }
+    b.textContent = text;
+    b.title = "Terakhir diperbarui BPS: " + when;
+    return b;
+  }
+
+  function knownUpdate(varId) {
+    if (MODE === "static") {
+      var rec = (CATALOG && CATALOG.updates) ? CATALOG.updates[varId] : null;
+      if (rec) return rec;
+    }
+    return BPSApi.getUpdate(varId);
+  }
+
   // ---------------------------------------------------------------- sources
 
-  var CUBES = {};      // ref -> cube, so flipping options never refetches
+  var CUBES = {};
+
+  function cacheKey(ref) { return MODE + "|" + JSON.stringify(ref); }
 
   function fetchCube(ref) {
-    var key = JSON.stringify(ref);
+    var key = cacheKey(ref);
     if (CUBES[key]) return Promise.resolve(CUBES[key]);
-    var p = ref.data ? getJSON(DATA + ref.data) : api("/api/cube", ref);
+    var p;
+    if (MODE === "static") p = getJSON(DATA + ref.data);
+    else if (MODE === "direct") {
+      p = ref.th === "latest" || !ref.th
+        ? BPSApi.getCubeLatest(ref.var, SET)
+        : BPSApi.getCube(ref.var, [ref.th], SET);
+    } else p = api("/api/cube", ref);
     return p.then(function (cube) { CUBES[key] = cube; return cube; });
   }
 
   function listSubjects() {
-    if (MODE === "static") return Promise.resolve(CATALOG.subjects);
+    if (MODE === "static") return Promise.resolve(CATALOG.subjects || []);
+    if (MODE === "direct") return BPSApi.getSubjects(SET);
     return api("/api/subjects");
   }
 
   function listVars(subject) {
-    if (MODE === "static") return Promise.resolve(CATALOG.vars[subject] || []);
+    if (MODE === "static") return Promise.resolve((CATALOG.vars || {})[subject] || []);
+    if (MODE === "direct") return BPSApi.getVars(subject, SET);
     return api("/api/vars", { subject: subject });
   }
 
   function listYears(varId) {
     if (MODE === "static") return Promise.resolve([]);
+    if (MODE === "direct") return BPSApi.getYears(varId, SET);
     return api("/api/years", { var: varId });
   }
 
   function cubeRefFor(v, th) {
-    return MODE === "static" ? { data: v.file } : { var: v.var_id, th: th };
+    return MODE === "static" ? { data: v.file } : { var: v.var_id, th: th || "latest" };
   }
 
   // ---------------------------------------------------------------- shell
@@ -133,71 +211,80 @@
     if (saved) document.documentElement.setAttribute("data-theme", saved);
   } catch (e) { }
 
-  function banner(msg) {
+  function banner(msg, action) {
     var b = $("banner");
+    b.textContent = "";
     b.hidden = !msg;
-    b.textContent = msg || "";
+    if (!msg) return;
+    htm("span", null, b, msg);
+    if (action) {
+      var link = htm("button", "linkish", b, action.label);
+      link.type = "button";
+      link.addEventListener("click", action.fn);
+    }
+  }
+
+  function modeAvailable() {
+    var out = [];
+    if (LIVE_OK) out.push(["live", "● Layanan lokal"]);
+    if (BPSApi.getKey()) out.push(["direct", "● API BPS langsung"]);
+    if (CATALOG) out.push(["static", "◐ Data tersimpan"]);
+    return out;
   }
 
   function applyMode() {
-    var live = MODE === "live";
-    $("view-files").hidden = true;
-    document.querySelector('nav button[data-view="files"]').hidden = !live;
-    document.querySelector('nav button[data-view="settings"]').hidden = !live;
+    document.querySelector('nav button[data-view="files"]').hidden = MODE !== "live";
+    if (MODE !== "live") $("view-files").hidden = true;
     var sel = $("mode");
+    var avail = modeAvailable();
     sel.textContent = "";
-    if (LIVE_OK) {
+    avail.forEach(function (m) {
       var o = document.createElement("option");
-      o.value = "live"; o.textContent = "● Data langsung (layanan lokal)";
+      o.value = m[0]; o.textContent = m[1];
       sel.appendChild(o);
-    }
-    if (CATALOG) {
-      var s = document.createElement("option");
-      s.value = "static";
-      s.textContent = "◐ Data tersimpan (" + (CATALOG.generated || "").slice(0, 10) + ")";
-      sel.appendChild(s);
-    }
+    });
     sel.value = MODE;
-    sel.hidden = sel.options.length < 2;
+    sel.hidden = avail.length < 2;
+    document.body.setAttribute("data-mode", MODE);
   }
 
-  var HEALTH = null;
-
   function showModeStatus() {
-    if (MODE === "live") {
-      $("conn").textContent = HEALTH && HEALTH.key_set
-        ? "layanan lokal terhubung" : "layanan lokal terhubung · kunci API belum diisi";
+    var conn = $("conn");
+    conn.className = "chip strong";
+    if (MODE === "direct") {
+      conn.textContent = "API BPS langsung · selalu terbaru";
+      banner("");
+    } else if (MODE === "live") {
+      conn.textContent = HEALTH && HEALTH.key_set
+        ? "layanan lokal · selalu terbaru" : "layanan lokal · kunci API belum diisi";
       banner(HEALTH && !HEALTH.key_set
-        ? "Belum ada kunci API BPS. Isi di tab Pengaturan, atau tulis ke file .bps_key."
-        : "");
+        ? "Belum ada kunci API BPS. Isi di tab Pengaturan, atau tulis ke file .bps_key." : "");
     } else if (CATALOG) {
-      $("conn").textContent = "data tersimpan · " + (CATALOG.variable_count || 0) + " variabel";
-      banner("Menampilkan data tersimpan di repositori (diperbarui " +
-        (CATALOG.generated || "?").slice(0, 10) + "). Untuk seluruh " +
-        (CATALOG.total_variables || "±1.700") + " variabel BPS dan periode apa pun, " +
-        "jalankan layanan lokal (python bps_dashboard.py) lalu muat ulang halaman ini.");
+      conn.textContent = "data tersimpan · " + (CATALOG.variable_count || 0) + " variabel";
+      banner("Menampilkan cuplikan data yang tersimpan di repositori (" +
+        (CATALOG.generated || "?").slice(0, 10) + "). Isi kunci API BPS Anda untuk " +
+        "mengambil data terbaru langsung dari BPS, untuk semua " +
+        (CATALOG.total_variables || "±3.000") + " variabel. ",
+        { label: "Isi kunci API", fn: function () {
+          document.querySelector('nav button[data-view="settings"]').click();
+          setTimeout(function () { $("s-key").focus(); }, 100);
+        } });
     } else {
-      $("conn").textContent = "tidak ada sumber data";
-      banner("Tidak dapat menghubungi layanan lokal di " + LOCAL +
-        " dan tidak ada data tersimpan. Jalankan `python bps_dashboard.py` " +
-        "(atau klik dua kali \"Start BPS Dashboard.bat\") lalu muat ulang halaman ini.");
+      conn.textContent = "tidak ada sumber data";
+      banner("Isi kunci API BPS di Pengaturan untuk mengambil data langsung dari BPS.");
     }
-    $("conn").classList.add("strong");
   }
 
   function boot() {
-    // The static catalog is what makes the published site work with no local
-    // machine; the live probe upgrades it when the service happens to be up.
     var cat = getJSON(DATA + "index.json").then(function (c) { CATALOG = c; })
       .catch(function () { CATALOG = null; });
     var live = api("/api/health").then(function (d) {
-      LIVE_OK = true;
-      return d;
+      LIVE_OK = true; return d;
     }).catch(function () { LIVE_OK = false; return null; });
 
     Promise.all([cat, live]).then(function (r) {
       HEALTH = r[1];
-      MODE = LIVE_OK ? "live" : (CATALOG ? "static" : "live");
+      MODE = LIVE_OK ? "live" : (BPSApi.getKey() ? "direct" : (CATALOG ? "static" : "direct"));
       applyMode();
       showModeStatus();
       loadSubjects();
@@ -205,7 +292,11 @@
   }
 
   $("mode").addEventListener("change", function () {
-    MODE = $("mode").value;
+    switchMode($("mode").value);
+  });
+
+  function switchMode(m) {
+    MODE = m;
     CUBES = {};
     S = freshState();
     $("card-vars").hidden = true;
@@ -213,7 +304,7 @@
     applyMode();
     showModeStatus();
     loadSubjects();
-  });
+  }
 
   // ---------------------------------------------------------------- state
 
@@ -247,7 +338,7 @@
       renderSubjects();
       var sel = $("g-subject");
       sel.textContent = "";
-      rows.slice().sort(function (a, b) { return a.title.localeCompare(b.title); })
+      rows.slice().sort(function (a, b) { return String(a.id).localeCompare(String(b.id)); })
         .forEach(function (s) {
           var o = document.createElement("option");
           o.value = s.id; o.textContent = s.id + " — " + s.title;
@@ -261,44 +352,63 @@
 
   $("q-subject").addEventListener("input", renderSubjects);
 
+  function snapshotCount(id) {
+    return CATALOG && CATALOG.vars && CATALOG.vars[id] ? CATALOG.vars[id].length : 0;
+  }
+
+  /* All 37 BPS subjects, grouped by their category, as on the BPS site. */
   function renderSubjects() {
     var q = $("q-subject").value.toLowerCase();
     var rows = SUBJECTS.filter(function (s) {
       return !q || (s.title + " " + s.subcat + " " + s.id).toLowerCase().indexOf(q) >= 0;
     });
+    $("subject-count").textContent = rows.length + " dari " + SUBJECTS.length;
     var box = $("subjects");
     box.textContent = "";
+    if (!rows.length) {
+      htm("p", "muted", box, "Tidak ada subjek yang cocok.");
+      return;
+    }
     var groups = {};
     rows.forEach(function (s) { (groups[s.subcat] = groups[s.subcat] || []).push(s); });
-    var table = htm("table", null, box);
-    var tr = htm("tr", null, htm("thead", null, table));
-    htm("th", null, tr, "Subjek");
-    htm("th", null, tr, "Kategori");
-    htm("th", "num", tr, MODE === "static" ? "Grafik" : "Tabel");
-    var tb = htm("tbody", null, table);
     Object.keys(groups).sort().forEach(function (cat) {
-      groups[cat].forEach(function (s) {
-        var r = htm("tr", "clk" + (S.subject == s.id ? " on" : ""), tb);
-        htm("td", null, r, s.id + " — " + s.title);
-        htm("td", "muted", r, cat);
-        htm("td", "num muted", r,
-          MODE === "static" ? ((CATALOG.vars[s.id] || []).length || "") : (s.ntabel || ""));
-        r.addEventListener("click", function () { pickSubject(s); });
-      });
+      htm("h3", "group-title", box, cat);
+      var list = htm("div", "subject-list", box);
+      groups[cat].sort(function (a, b) { return String(a.id).localeCompare(String(b.id)); })
+        .forEach(function (s) {
+          var n = snapshotCount(s.id);
+          var empty = MODE === "static" && !n;
+          var row = htm("button", "subject-row" + (S.subject == s.id ? " on" : "") +
+            (empty ? " dim" : ""), list);
+          row.type = "button";
+          htm("span", "sid", row, s.id);
+          htm("span", "stitle", row, s.title);
+          if (MODE === "static" && n) htm("span", "pill-ok", row, n + " grafik");
+          htm("span", "scount", row, (s.ntabel || 0) + " tabel");
+          row.addEventListener("click", function () { pickSubject(s, empty); });
+        });
     });
-    if (!rows.length) htm("p", "muted", box, "Tidak ada subjek yang cocok.");
   }
 
   // ---------------------------------------------------------------- variables
 
   var VARS = [];
 
-  function pickSubject(s) {
+  function pickSubject(s, emptyInSnapshot) {
     S.subject = s.id; S.subjectTitle = s.title;
     renderSubjects();
     $("card-vars").hidden = false;
     $("vars-hint").textContent = "Variabel dinamis di subjek " + s.id + " — " + s.title + ".";
     $("vars").textContent = "";
+    if (emptyInSnapshot) {
+      VARS = [];
+      var box = $("vars");
+      htm("p", "muted", box,
+        "Subjek ini belum ada dalam cuplikan tersimpan. Isi kunci API BPS di " +
+        "Pengaturan untuk membuka seluruh variabelnya langsung dari BPS.");
+      $("btn-check").hidden = true;
+      return;
+    }
     htm("p", "muted", $("vars"), "memuat…");
     listVars(s.id).then(function (rows) {
       VARS = rows;
@@ -318,27 +428,43 @@
     });
     var box = $("vars");
     box.textContent = "";
+    $("btn-check").hidden = MODE !== "direct" || !VARS.length;
     if (!VARS.length) {
-      htm("p", "muted", box, MODE === "static"
-        ? "Subjek ini belum ada dalam data tersimpan. Jalankan layanan lokal untuk semua variabel."
-        : "Tidak ada variabel.");
+      htm("p", "muted", box, "Tidak ada variabel.");
       return;
     }
     var table = htm("table", null, box);
     var tr = htm("tr", null, htm("thead", null, table));
     htm("th", null, tr, "Variabel");
     htm("th", null, tr, "Satuan");
+    htm("th", null, tr, "Diperbarui");
     htm("th", "num", tr, "ID");
     var tb = htm("tbody", null, table);
     rows.forEach(function (v) {
       var r = htm("tr", "clk" + (S.varId == v.var_id ? " on" : ""), tb);
       htm("td", null, r, v.title);
       htm("td", "muted", r, v.unit || "—");
+      var td = htm("td", null, r);
+      var when = v.last_update || knownUpdate(v.var_id);
+      if (!updateBadge(td, when)) htm("span", "muted", td, "—");
       htm("td", "num muted", r, v.var_id);
       r.addEventListener("click", function () { pickVar(v); });
     });
     if (!rows.length) htm("p", "muted", box, "Tidak ada variabel yang cocok.");
   }
+
+  $("btn-check").addEventListener("click", function () {
+    var btn = $("btn-check");
+    btn.disabled = true;
+    var original = btn.textContent;
+    BPSApi.checkUpdates(VARS, SET, function (done, total) {
+      btn.textContent = "memeriksa " + done + "/" + total + "…";
+    }).then(function () {
+      btn.disabled = false;
+      btn.textContent = original;
+      renderVars();
+    });
+  });
 
   function pickVar(v) {
     S.varId = v.var_id; S.varTitle = v.title; S.varRec = v;
@@ -380,7 +506,7 @@
       S.spec = BPSInfer.buildSpec(cube, specOpts(S.opts));
       box.classList.remove("loading");
       paint(S.spec, S, $("chart-title"), $("chart-sub"), $("chart-chips"),
-        $("controls"), $("chart"), $("table"), requestChart, MODE === "live");
+        $("controls"), $("chart"), $("table"), requestChart, MODE !== "static");
     }).catch(function (e) {
       box.classList.remove("loading");
       box.textContent = "";
@@ -411,8 +537,12 @@
     htm("span", "chip", elChips, spec.structure);
     htm("span", "chip", elChips, spec.reason);
     if (st.cube && st.cube.source && st.cube.source.rows) {
-      htm("span", "chip", elChips, st.cube.source.rows.toLocaleString("id-ID") + " baris data");
+      htm("span", "chip", elChips, st.cube.source.rows.toLocaleString("id-ID") + " nilai");
     }
+    var when = (st.cube && st.cube.last_update) ||
+      (st.varId ? knownUpdate(st.varId) : null);
+    if (when && st.varId) BPSApi.rememberUpdate(st.varId, when);
+    updateBadge(elChips, when, { long: true });
 
     buildControls(spec, st, elControls, onChange, withYears);
     drawInto(elChart, spec, st.hidden);
@@ -495,8 +625,7 @@
 
     if ((spec.totals_dropped && spec.totals_dropped.length) || spec.include_totals) {
       var f = field(box, "Baris agregat");
-      var lab = htm("label", null, f);
-      lab.style.cssText = "display:flex;gap:6px;align-items:center;font-size:13px;padding:6px 0";
+      var lab = htm("label", "checkline", f);
       var cb = htm("input", null, lab);
       cb.type = "checkbox";
       cb.checked = !!spec.include_totals;
@@ -583,7 +712,6 @@
   wireButtons("", function () { return S; }, $("chart"), $("table"));
   wireButtons("f", function () { return F; }, $("fchart"), $("ftable"));
 
-  // CSV: from the service when it is running, otherwise straight from the cube
   $("btn-csv").addEventListener("click", function () {
     if (MODE === "live" && S.varId) {
       location.href = API + "/api/data.csv" + qs({ var: S.varId, th: S.th });
@@ -613,19 +741,24 @@
       box.textContent = "";
       var list = vars.slice(0, limit);
       if (!list.length) {
-        htm("p", "muted", htm("div", "card", box), "Tidak ada variabel untuk subjek ini.");
+        htm("p", "muted", htm("div", "card", box),
+          "Tidak ada variabel untuk subjek ini pada sumber data yang aktif.");
         return;
       }
       var queue = list.map(function (v) {
         var card = htm("div", "card", box);
         htm("p", "chart-title", card, v.title);
-        htm("p", "chart-sub", card, "var " + v.var_id + (v.unit ? " · " + v.unit : ""));
+        var meta = htm("p", "chart-sub", card);
+        htm("span", null, meta, "var " + v.var_id + (v.unit ? " · " + v.unit : ""));
         var chips = htm("div", "chips", card);
         var plot = htm("div", null, card);
         htm("p", "muted", plot, "menunggu…");
         return { v: v, card: card, chips: chips, plot: plot, done: false };
       });
       pump(queue);
+    }).catch(function (e) {
+      box.textContent = "";
+      htm("p", "err", htm("div", "card", box), e.message);
     });
   }
 
@@ -638,8 +771,6 @@
       });
     }, { rootMargin: "300px" });
     queue.forEach(function (q) { io.observe(q.card); });
-    // The observer only fires for a visible tab, so the first screenful is
-    // requested outright; the rest still wait until they are scrolled near.
     queue.slice(0, 4).forEach(function (q) { q.wanted = true; });
     next();
 
@@ -657,7 +788,7 @@
           item.chips.textContent = "";
           htm("span", "chip strong", item.chips, spec.chart_label);
           htm("span", "chip", item.chips, spec.structure);
-          if (spec.subtitle) htm("span", "chip", item.chips, spec.subtitle);
+          updateBadge(item.chips, cube.last_update || knownUpdate(item.v.var_id));
           BPSChart.render(item.plot, spec, {
             hidden: new Set(), height: 240, onToggle: function () { }
           });
@@ -710,7 +841,7 @@
   function requestFileChart() {
     var box = $("fchart");
     box.classList.add("loading");
-    fetchCube({ file: F.file }).then(function (cube) {
+    getJSON(API + "/api/cube" + qs({ file: F.file })).then(function (cube) {
       F.cube = cube;
       F.spec = BPSInfer.buildSpec(cube, specOpts(F.opts));
       box.classList.remove("loading");
@@ -725,46 +856,88 @@
 
   // ---------------------------------------------------------------- settings
 
-  var settingsReady = false;
+  var settingsWired = false;
 
   function loadSettings() {
-    api("/api/settings").then(function (s) {
-      $("s-lang").value = s.lang;
-      $("s-status").textContent = s.key_set
-        ? "Kunci API aktif (" + s.key_masked + ")." : "Belum ada kunci API.";
-      if (!settingsReady) {
-        settingsReady = true;
-        api("/api/domains").then(function (ds) {
-          var sel = $("s-domain");
-          sel.textContent = "";
-          ds.forEach(function (d) {
-            var o = document.createElement("option");
-            o.value = d.id; o.textContent = d.id + " — " + d.name;
-            sel.appendChild(o);
-          });
-          sel.value = s.domain;
-        }).catch(function () { });
-        $("s-save").addEventListener("click", function () {
-          post("/api/settings", {
-            domain: $("s-domain").value, lang: $("s-lang").value, key: $("s-key").value
-          }).then(function () {
-            $("s-key").value = "";
-            CUBES = {};
-            $("s-status").textContent = "Tersimpan. Memuat ulang subjek…";
-            loadSubjects();
-            loadSettings();
-          });
-        });
-        $("s-clear").addEventListener("click", function () {
-          post("/api/clear_cache").then(function (d) {
-            CUBES = {};
-            $("s-status").textContent = "Cache dikosongkan (" + (d.removed || 0) + " berkas).";
-          });
-        });
+    $("s-lang").value = SET.lang;
+    $("s-key-state").textContent = BPSApi.getKey()
+      ? "Kunci tersimpan di browser ini (" + BPSApi.maskKey() + ")."
+      : "Belum ada kunci di browser ini.";
+    $("s-domain-wrap").hidden = false;
+
+    if (MODE === "live") {
+      api("/api/settings").then(function (s) {
+        $("s-lang").value = s.lang;
+        $("s-status").textContent = s.key_set
+          ? "Layanan lokal aktif dengan kunci di .bps_key (" + s.key_masked + ")."
+          : "Layanan lokal aktif, tetapi .bps_key masih kosong.";
+        fillDomains(s.domain);
+      }).catch(function () { });
+    } else {
+      $("s-status").textContent = MODE === "direct"
+        ? "Browser mengambil data langsung dari webapi.bps.go.id."
+        : "Sedang memakai data tersimpan di repositori.";
+      if (BPSApi.getKey()) fillDomains(SET.domain);
+    }
+
+    if (settingsWired) return;
+    settingsWired = true;
+
+    $("s-save").addEventListener("click", function () {
+      var key = $("s-key").value.trim();
+      SET.lang = $("s-lang").value;
+      if ($("s-domain").value) SET.domain = $("s-domain").value;
+      saveSettings();
+      if (key) BPSApi.setKey(key);
+      $("s-key").value = "";
+      if (MODE === "live") {
+        post("/api/settings", {
+          domain: SET.domain, lang: SET.lang, key: key
+        }).then(function () { CUBES = {}; loadSubjects(); loadSettings(); });
+      } else {
+        CUBES = {};
+        if (BPSApi.getKey() && MODE !== "direct") switchMode("direct");
+        else { applyMode(); showModeStatus(); loadSubjects(); }
+        loadSettings();
       }
-    }).catch(function (e) {
-      $("s-status").textContent = e.message;
     });
+
+    $("s-forget").addEventListener("click", function () {
+      BPSApi.setKey("");
+      CUBES = {};
+      if (MODE === "direct") switchMode(CATALOG ? "static" : "direct");
+      else { applyMode(); showModeStatus(); }
+      loadSettings();
+    });
+
+    $("s-clear").addEventListener("click", function () {
+      CUBES = {};
+      if (MODE === "live") {
+        post("/api/clear_cache").then(function (d) {
+          $("s-status").textContent = "Cache dikosongkan (" + (d.removed || 0) + " berkas).";
+        });
+      } else {
+        $("s-status").textContent = "Cache di browser dikosongkan.";
+      }
+    });
+  }
+
+  var domainsLoaded = false;
+
+  function fillDomains(current) {
+    if (domainsLoaded) { $("s-domain").value = current || SET.domain; return; }
+    var p = MODE === "live" ? api("/api/domains") : BPSApi.getDomains();
+    p.then(function (ds) {
+      domainsLoaded = true;
+      var sel = $("s-domain");
+      sel.textContent = "";
+      ds.forEach(function (d) {
+        var o = document.createElement("option");
+        o.value = d.id; o.textContent = d.id + " — " + d.name;
+        sel.appendChild(o);
+      });
+      sel.value = current || SET.domain;
+    }).catch(function () { });
   }
 
   boot();

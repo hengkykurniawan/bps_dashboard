@@ -760,22 +760,24 @@
   function stat(ctx) {
     var spec = ctx.spec, t = ctx.t, svg = ctx.svg;
     var v = ctx.visible[0].values[0];
-    var cx = ctx.width / 2, cy = ctx.height / 2;
+    var cx = ctx.width / 2;
+    // Laid out from the top with explicit gaps: a 48px figure's em box is much
+    // taller than its digits, so centring the three lines lets the boxes touch.
+    var cap = spec.x.categories[0];
     el("text", {
-      x: cx, y: cy + 4, "text-anchor": "middle", fill: t.ink,
+      x: cx, y: 34, "text-anchor": "middle", fill: t.muted,
+      "font-size": 12, "font-family": FONT
+    }, svg).textContent = (cap.full || cap.label || "");
+    el("text", {
+      x: cx, y: 100, "text-anchor": "middle", fill: t.ink,
       "font-size": 48, "font-weight": 600, "font-family": FONT
     }, svg).textContent = fmt(v);
     if (spec.unit) {
       el("text", {
-        x: cx, y: cy + 30, "text-anchor": "middle", fill: t.ink2,
+        x: cx, y: 134, "text-anchor": "middle", fill: t.ink2,
         "font-size": 13, "font-family": FONT
       }, svg).textContent = spec.unit;
     }
-    var cap = spec.x.categories[0];
-    el("text", {
-      x: cx, y: cy - 46, "text-anchor": "middle", fill: t.muted,
-      "font-size": 12, "font-family": FONT
-    }, svg).textContent = (cap.full || cap.label || "");
     ctx.plotHeight = ctx.height;
   }
 
@@ -868,7 +870,7 @@
       return Math.ceil(spec.series.length / cols) * 130;
     }
     if (spec.chart === "donut") return 360;
-    if (spec.chart === "stat") return 170;
+    if (spec.chart === "stat") return 150;
     return Math.max(280, Math.min(460, width * 0.5));
   }
 

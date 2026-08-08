@@ -6,13 +6,13 @@
 <title>BPS Dashboard — grafik data BPS</title>
 <meta name="description" content="Visualisasi data dinamis BPS (webapi.bps.go.id). Jenis grafik dipilih otomatis dari struktur tiap variabel.">
 <link rel="stylesheet" href="styles.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%232a78d6'/><rect x='3' y='8' width='2.4' height='5' fill='white'/><rect x='6.8' y='5' width='2.4' height='8' fill='white'/><rect x='10.6' y='3' width='2.4' height='10' fill='white'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='4' fill='%23fffefb'/><rect x='3' y='8' width='2.4' height='5' rx='1' fill='%232a78d6'/><rect x='6.8' y='5' width='2.4' height='8' rx='1' fill='%231baf7a'/><rect x='10.6' y='3' width='2.4' height='10' rx='1' fill='%23eda100'/></svg>">
 </head>
 <body>
 
 <header>
   <div>
-    <h1>BPS Dashboard</h1>
+    <h1><span class="dot"></span>BPS Dashboard</h1>
     <div class="sub">Data dinamis BPS &rarr; grafik. Jenis grafik mengikuti struktur variabel.</div>
   </div>
   <div class="spacer"></div>
@@ -35,15 +35,23 @@
   <!-- ------------------------------------------------------ explore -->
   <section id="view-explore">
     <div class="card">
-      <h2>1 · Subjek</h2>
-      <p class="hint">37 subjek statistik BPS — sama dengan <code>subject=</code> di situs BPS.</p>
-      <div class="filters">
-        <div class="field">
-          <label for="q-subject">Cari subjek</label>
-          <input id="q-subject" type="search" placeholder="mis. neraca, harga, tenaga kerja">
+      <div class="chart-head">
+        <div style="flex:1 1 260px">
+          <h2>1 · Subjek</h2>
+          <p class="hint">Seluruh subjek statistik BPS, dikelompokkan seperti di situs BPS.</p>
+        </div>
+        <div class="filters">
+          <div class="field">
+            <label for="q-subject">Cari subjek</label>
+            <input id="q-subject" type="search" placeholder="mis. neraca, harga, tenaga kerja">
+          </div>
+          <div class="field">
+            <label>&nbsp;</label>
+            <span class="chip" id="subject-count">—</span>
+          </div>
         </div>
       </div>
-      <div class="list" id="subjects"><p class="muted">memuat…</p></div>
+      <div id="subjects"><p class="muted">memuat…</p></div>
     </div>
 
     <div class="card" id="card-vars" hidden>
@@ -53,6 +61,11 @@
         <div class="field">
           <label for="q-var">Cari variabel</label>
           <input id="q-var" type="search" placeholder="cari judul variabel">
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button class="gho" id="btn-check" type="button" hidden
+                  title="Ambil tanggal pembaruan terakhir tiap variabel dari BPS">↻ Cek pembaruan</button>
         </div>
       </div>
       <div class="list" id="vars"></div>
@@ -72,7 +85,7 @@
         </div>
       </div>
       <div class="chips" id="chart-chips"></div>
-      <div class="filters" id="controls" style="margin-top:12px"></div>
+      <div class="filters" id="controls" style="margin-top:14px"></div>
       <div id="chart"></div>
       <div class="table-view" id="table" hidden></div>
     </div>
@@ -106,8 +119,8 @@
   <section id="view-files" hidden>
     <div class="card">
       <h2>File lokal</h2>
-      <p class="hint">CSV tidy hasil <code>bps_data.py</code> / <code>bps_chart.py</code> di folder ini
-        (tambah folder lain dengan <code>--data-dir</code>). Berguna saat offline.</p>
+      <p class="hint">CSV tidy hasil <code>bps_data.py</code> / <code>bps_chart.py</code> di folder aplikasi
+        (tambah folder lain dengan <code>--data-dir</code>). Hanya tersedia saat layanan lokal berjalan.</p>
       <div class="list" id="files"></div>
     </div>
     <div class="card" id="card-fchart" hidden>
@@ -122,7 +135,7 @@
         </div>
       </div>
       <div class="chips" id="fchart-chips"></div>
-      <div class="filters" id="fcontrols" style="margin-top:12px"></div>
+      <div class="filters" id="fcontrols" style="margin-top:14px"></div>
       <div id="fchart"></div>
       <div class="table-view" id="ftable" hidden></div>
     </div>
@@ -131,10 +144,32 @@
   <!-- ------------------------------------------------------ settings -->
   <section id="view-settings" hidden>
     <div class="card">
-      <h2>Pengaturan</h2>
-      <p class="hint">Kunci API tersimpan di <code>.bps_key</code> pada folder aplikasi dan tidak
-        pernah dikirim ke halaman GitHub Pages.</p>
+      <h2>Kunci API BPS</h2>
+      <p class="hint">Dengan kunci Anda sendiri, halaman ini mengambil data
+        <strong>langsung dari webapi.bps.go.id</strong> — seluruh variabel, periode apa pun,
+        selalu terbaru, tanpa perlu menjalankan apa pun.
+        Ambil kunci gratis di <a href="https://webapi.bps.go.id/developer/" target="_blank" rel="noopener">webapi.bps.go.id/developer</a>.</p>
       <div class="filters">
+        <div class="field">
+          <label for="s-key">Kunci API</label>
+          <input id="s-key" type="password" placeholder="tempel kunci di sini" autocomplete="off">
+        </div>
+        <div class="field"><label>&nbsp;</label>
+          <button class="act" id="s-save" type="button">Simpan</button></div>
+        <div class="field"><label>&nbsp;</label>
+          <button class="gho" id="s-forget" type="button">Hapus kunci</button></div>
+      </div>
+      <p class="chart-sub" id="s-key-state"></p>
+      <p class="viz-note">Kunci disimpan di <code>localStorage</code> browser ini saja dan hanya
+        dikirim ke webapi.bps.go.id. Kunci tidak pernah masuk ke repositori dan tidak dibagikan
+        ke pengunjung lain. Di komputer bersama, sebaiknya pakai layanan lokal
+        (<code>python bps_dashboard.py</code>) agar kunci cukup tersimpan di berkas
+        <code>.bps_key</code>.</p>
+    </div>
+
+    <div class="card">
+      <h2>Wilayah &amp; bahasa</h2>
+      <div class="filters" id="s-domain-wrap">
         <div class="field">
           <label for="s-domain">Domain (wilayah)</label>
           <select id="s-domain"><option value="0000">0000 — Nasional</option></select>
@@ -143,12 +178,6 @@
           <label for="s-lang">Bahasa</label>
           <select id="s-lang"><option value="ind">Indonesia</option><option value="eng">English</option></select>
         </div>
-        <div class="field">
-          <label for="s-key">Kunci API BPS</label>
-          <input id="s-key" type="password" placeholder="tempel kunci baru (opsional)">
-        </div>
-        <div class="field"><label>&nbsp;</label>
-          <button class="act" id="s-save" type="button">Simpan</button></div>
         <div class="field"><label>&nbsp;</label>
           <button class="gho" id="s-clear" type="button">Kosongkan cache</button></div>
       </div>
@@ -163,29 +192,31 @@
       <p class="hint">Sumber data sama dengan
         <a href="https://github.com/hengkykurniawan/bps_download" target="_blank" rel="noopener">bps_download</a>:
         <code>webapi.bps.go.id</code> (Tabel Dinamis). Bedanya, keluarannya grafik, bukan tabel.</p>
-      <h2 style="margin-top:14px">Dua sumber data</h2>
+
+      <h2 style="margin-top:16px">Tiga sumber data</h2>
       <div class="table-view" style="max-height:none">
         <table>
-          <thead><tr><th>Mode</th><th style="text-align:left">Isi</th><th style="text-align:left">Syarat</th></tr></thead>
+          <thead><tr><th>Sumber</th><th style="text-align:left">Cakupan</th><th style="text-align:left">Syarat</th></tr></thead>
           <tbody>
+            <tr><td>● API BPS langsung</td>
+              <td style="text-align:left">Seluruh variabel &amp; periode, selalu terbaru</td>
+              <td style="text-align:left">Kunci API Anda sendiri, disimpan di browser ini</td></tr>
+            <tr><td>● Layanan lokal</td>
+              <td style="text-align:left">Sama, plus file CSV di komputer Anda</td>
+              <td style="text-align:left"><code>python bps_dashboard.py</code>; kunci tetap di berkas</td></tr>
             <tr><td>◐ Data tersimpan</td>
-              <td style="text-align:left">Cuplikan JSON yang ikut tersimpan di repositori, disegarkan berkala oleh GitHub Actions</td>
-              <td style="text-align:left">Tidak perlu apa pun — berjalan penuh di browser</td></tr>
-            <tr><td>● Data langsung</td>
-              <td style="text-align:left">Seluruh variabel BPS, periode apa pun, selalu terbaru</td>
-              <td style="text-align:left">Jalankan <code>python bps_dashboard.py</code> di komputer sendiri</td></tr>
+              <td style="text-align:left">Cuplikan yang ikut di repositori, disegarkan berkala</td>
+              <td style="text-align:left">Tidak perlu apa pun</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="viz-note">Kunci API BPS tidak pernah ada di halaman ini. Mode tersimpan
-        memakai data yang sudah diambil sebelumnya; mode langsung memakai layanan lokal
-        yang menyimpan kuncinya sendiri. Jenis grafik ditentukan oleh kode yang sama
-        (<code>docs/infer.js</code>) pada kedua mode.</p>
-      <h2 style="margin-top:14px">Bagaimana jenis grafik dipilih?</h2>
+
+      <h2 style="margin-top:18px">Bagaimana jenis grafik dipilih?</h2>
       <div class="table-view" style="max-height:none">
         <table>
           <thead><tr><th>Struktur variabel</th><th style="text-align:left">Grafik</th></tr></thead>
           <tbody>
+            <tr><td>1 nilai saja</td><td style="text-align:left">Angka tunggal</td></tr>
             <tr><td>1 seri, ≥3 periode</td><td style="text-align:left">Garis</td></tr>
             <tr><td>1 seri, ≤2 periode</td><td style="text-align:left">Batang</td></tr>
             <tr><td>2–8 komponen dari satu total, sepanjang waktu</td><td style="text-align:left">Area bertumpuk (100% bila berupa persen)</td></tr>
@@ -201,11 +232,14 @@
       </div>
       <p class="viz-note">Warna kategori memakai 8 slot tetap yang sudah diuji aman untuk buta warna;
         lebih dari 8 seri tidak menambah warna baru — bentuk grafiknya yang berubah
-        (panel kecil atau heatmap). Setiap grafik punya kembaran tabel lewat tombol “Tabel”.</p>
+        (panel kecil atau heatmap). Setiap grafik punya kembaran tabel lewat tombol “Tabel”.
+        Baris agregat (mis. “INDONESIA”, “Jumlah”, “PDRB”) dideteksi dari nilainya dan
+        dikeluarkan agar tidak dihitung dua kali.</p>
     </div>
   </section>
 </main>
 
+<script src="bps-api.js"></script>
 <script src="infer.js"></script>
 <script src="charts.js"></script>
 <script src="app.js"></script>

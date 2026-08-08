@@ -14,22 +14,34 @@ of each variable*.
 **No installs, no dependencies.** Pure Python 3 standard library on the server
 side, plain JavaScript in the browser: no CDN, no build step, no packages.
 
-## Two ways to use it
+## Three data sources, one app
 
-| | **Online** — the link above | **Local** — `python bps_dashboard.py` |
+`webapi.bps.go.id` sends permissive CORS headers, so the published page can call
+BPS itself. Pick a source in the header; the charts are identical because all
+three feed the same cube to `docs/infer.js`.
+
+| Source | Covers | Needs |
 |---|---|---|
-| Needs | nothing; runs in the browser | Python 3 and your BPS API key |
-| Data | a snapshot committed to `docs/data/`, refreshed weekly by GitHub Actions | live from `webapi.bps.go.id` |
-| Covers | the snapshotted subjects (currently 520, 530, 531) | every BPS variable, every period, always current |
-| Charts | identical — both run `docs/infer.js` in the browser | identical |
+| **● API BPS langsung** | every variable, every period, **always current** | your own BPS key, pasted once into Settings |
+| **● Layanan lokal** | the same, plus tidy CSVs already on your disk | `python bps_dashboard.py` running |
+| **◐ Data tersimpan** | the snapshotted subjects, as of the last refresh | nothing at all |
 
-The published page detects a running local service and offers both as a picker
-in the header; with no service it simply uses the snapshot.
+The page picks the best source available and remembers your key, so the online
+link behaves like a normal web app after the first visit.
 
-**The API key is never in the page.** A static site cannot hold a secret, so the
-online build charts data that was fetched beforehand — by you, or by the
-scheduled workflow using a repository secret. The key lives only in `.bps_key`
-on your machine, or in the Actions secret.
+### About that key
+
+The **repository holds no key and never will** — a public page cannot keep a
+secret. In direct mode the key is *yours*: typed into Settings, stored in your
+own browser's `localStorage`, and sent only to `webapi.bps.go.id`. It is not
+committed, not bundled, and not shared with anyone else who opens the page —
+they use their own (free from
+[webapi.bps.go.id/developer](https://webapi.bps.go.id/developer/)).
+
+Anyone with access to your browser profile can read `localStorage` back, so on a
+**shared machine** prefer the local service, where the key stays in the
+`.bps_key` file and never enters a browser at all. "Hapus kunci" in Settings
+removes it.
 
 ## Quick start
 
@@ -56,7 +68,7 @@ use it. On Windows you can double-click **`Start BPS Dashboard.bat`** instead.
 
 | Tab | What it does |
 |---|---|
-| **Jelajah** | Subject → variable → chart. The chart type is picked automatically; every dimension of the variable becomes a control (x axis, colour, which region/category to hold fixed, top-N, sorting). |
+| **Jelajah** | All 37 BPS subjects grouped as on the BPS site → variable → chart. The chart type is picked automatically; every dimension of the variable becomes a control (x axis, colour, which region/category to hold fixed, top-N, sorting). |
 | **Galeri subjek** | Every variable in one subject, charted at once (latest period), loaded as you scroll. A fast way to see what a subject actually contains. |
 | **File lokal** | Charts any tidy CSV already on disk — including the `data_var*.csv` files written by `bps_download`. Works offline. |
 | **Pengaturan** | Region/**domain** (national or any of the 549 regional offices), language, API key, and a cache reset. |
@@ -82,10 +94,24 @@ hours in `cache/` so flipping chart options does not re-hit the API.
 
 ---
 
-## 📸 The online build — `bps_snapshot.py`
+## 🕒 Freshness badges
 
-The published site reads JSON committed under `docs/data/`: `index.json` (the
-catalogue) plus one cube per variable. Rebuild or extend it with:
+BPS reports a `last_update` for every variable, and it is shown wherever a
+variable appears: as a column in the variable list and as a badge on the chart
+itself — `5 Agu 2026 · 3 hari lalu`, tinted green within 30 days and amber
+within six months. In the snapshot the dates ride along in `index.json`; in
+direct mode **↻ Cek pembaruan** fetches them for the whole subject at once,
+reading only the first few KB of each response and aborting the rest, so a
+90-variable subject costs a fraction of its data.
+
+---
+
+## 📸 The no-key fallback — `bps_snapshot.py`
+
+So the page shows something useful before anyone enters a key, a snapshot is
+committed under `docs/data/`: `index.json` (all 37 subjects, the snapshotted
+variables, and their update dates) plus one cube per variable. Rebuild or extend
+it with:
 
 ```bash
 python bps_snapshot.py --subject 530 531           # snapshot two subjects
@@ -199,7 +225,8 @@ type is decided by the same code the app uses, when the page opens.
 | `bps_api.py` | BPS WebAPI: key, paging, decoding into tidy rows and into the chart-ready cube |
 | `bps_dashboard.py` | The local web app (HTTP + static files, stdlib only) |
 | `bps_chart.py` | Command-line charts and reports |
-| `bps_snapshot.py` | Builds `docs/data/` for the online build |
+| `bps_snapshot.py` | Builds `docs/data/` for the no-key fallback |
+| `docs/bps-api.js` | The browser's own BPS client (direct mode) |
 | `docs/infer.js` | **The decision table above** — dimensions → chart spec |
 | `docs/charts.js` | The SVG renderer |
 | `docs/app.js`, `docs/index.html`, `docs/styles.css` | The UI, and the GitHub Pages entry point |

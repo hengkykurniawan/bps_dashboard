@@ -313,7 +313,33 @@ def to_cube(rows):
 
     meta = var_meta(rows)
     return {"var_id": meta["var_id"], "title": meta["title"], "unit": meta["unit"],
-            "vervar": vv, "turvar": tv, "time": ti, "values": values}
+            "last_update": "", "vervar": vv, "turvar": tv, "time": ti,
+            "values": values}
+
+
+def get_cube(var, ths, domain=None, lang=None):
+    """Cube for one variable across one or more periods, carrying the
+    `last_update` BPS reports for it (the freshness badge in the UI)."""
+    if ths in ("all", ["all"], "latest", ["latest"]):
+        years = get_years(var)
+        if not years:
+            return to_cube([])
+        ths = [str(years[-1]["th_id"])] if ths in ("latest", ["latest"]) \
+            else [str(y["th_id"]) for y in years]
+    elif isinstance(ths, (str, int)):
+        ths = [str(ths)]
+    rows, last = [], ""
+    for th in ths:
+        d = fetch_data(var, th, domain, lang)
+        rows += decode_rows(d)
+        lu = str(d.get("last_update") or "")
+        if lu > last:
+            last = lu
+    cube = to_cube(rows)
+    cube["last_update"] = last
+    if not cube["var_id"]:
+        cube["var_id"] = str(var)
+    return cube
 
 
 def from_cube(cube):

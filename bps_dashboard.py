@@ -111,14 +111,23 @@ def cube_from_query(q):
     GitHub Pages build behave identically."""
     if q.get("file"):
         rows = rows_for_file(q["file"][0])
-        src = {"file": q["file"][0]}
-    else:
-        var = q["var"][0]
-        ths = resolve_ths(var, q.get("th") or ["all"])
-        rows = rows_for(var, ths)
-        src = {"var": var, "th": ths}
-    cube = api.to_cube(rows)
-    cube["source"] = dict(src, rows=len(rows))
+        cube = api.to_cube(rows)
+        cube["source"] = {"file": q["file"][0], "rows": len(rows)}
+        return cube
+    var = q["var"][0]
+    ths = tuple(resolve_ths(var, q.get("th") or ["all"]))
+    key = ("cube", str(var), ths, api.SETTINGS["domain"], api.SETTINGS["lang"])
+    with _ROWS_LOCK:
+        hit = _ROWS_CACHE.get(key)
+    if hit is None:
+        hit = api.get_cube(var, list(ths))
+        with _ROWS_LOCK:
+            if len(_ROWS_CACHE) >= _CACHE_MAX:
+                _ROWS_CACHE.pop(next(iter(_ROWS_CACHE)))
+            _ROWS_CACHE[key] = hit
+    cube = dict(hit)
+    cells = sum(1 for p in cube["values"] for r in p for v in r if v is not None)
+    cube["source"] = {"var": var, "th": list(ths), "rows": cells}
     return cube
 
 
