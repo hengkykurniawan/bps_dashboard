@@ -34,7 +34,6 @@ import os
 import sys
 
 import bps_api as api
-import bps_viz as viz
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DOCS = os.path.join(SCRIPT_DIR, "docs")
@@ -64,11 +63,15 @@ summary {{ cursor: pointer; color: var(--text-secondary); font-size: 12px; }}
 <p class="src">Sumber: BPS WebAPI (webapi.bps.go.id) &middot; dibuat dengan bps_dashboard</p>
 <div id="root"></div>
 </main>
+<script>{infer}</script>
 <script>{charts}</script>
 <script>
-var SPECS = {specs};
+// The cubes travel with the page and the chart type is decided here, by the
+// same code the app and the published site use.
+var CUBES = {cubes}, OPTS = {opts};
 var root = document.getElementById("root");
-SPECS.forEach(function (spec) {{
+CUBES.forEach(function (cube) {{
+  var spec = BPSInfer.buildSpec(cube, OPTS);
   var card = document.createElement("div");
   card.className = "card";
   root.appendChild(card);
@@ -134,11 +137,13 @@ SPECS.forEach(function (spec) {{
 """
 
 
-def write_page(specs, path, heading):
+def write_page(cubes, path, heading, opts=None):
     page = PAGE.format(
         title=html_mod.escape(heading), heading=html_mod.escape(heading),
-        css=_asset("styles.css"), charts=_asset("charts.js"),
-        specs=json.dumps(specs, ensure_ascii=False))
+        css=_asset("styles.css"), infer=_asset("infer.js"),
+        charts=_asset("charts.js"),
+        cubes=json.dumps(cubes, ensure_ascii=False),
+        opts=json.dumps(opts or {}, ensure_ascii=False))
     with open(path, "w", encoding="utf-8") as f:
         f.write(page)
     return path
@@ -147,14 +152,44 @@ def write_page(specs, path, heading):
 # ----------------------------------------------------------------- commands
 
 def opts_from_args(args):
+    """Chart options in the shape docs/infer.js expects."""
     pick = {}
     for dim in ("vervar", "turvar", "time"):
         v = getattr(args, "pick_" + dim, None)
         if v:
             pick[dim] = v
-    return {"chart": args.chart, "x": args.x, "series": args.series,
-            "top": args.top, "sort": args.sort, "pick": pick,
-            "include_totals": getattr(args, "include_totals", False)}
+    return {k: v for k, v in {
+        "chart": args.chart, "x": args.x, "series": args.series,
+        "top": args.top, "sort": args.sort, "pick": pick or None,
+        "includeTotals": getattr(args, "include_totals", False) or None,
+    }.items() if v}
+
+
+def structure_of(cube):
+    """Dimension sizes, for the console line. Which chart that shape implies is
+    decided by docs/infer.js when the page renders."""
+    bits = []
+    for key, noun in (("vervar", "entitas"), ("turvar", "kategori"), ("time", "periode")):
+        n = len(cube[key])
+        if n > 1:
+            bits.append(f"{n} {noun}")
+    return " x ".join(bits) or "nilai tunggal"
+
+
+def fetch_var_rows(var, th):
+    """Rows for one variable. `th` is 'all', 'latest', or explicit year ids."""
+    if th in ("all", "latest", ["all"], ["latest"]):
+        years = api.get_years(var)
+        if not years:
+            return []
+        ths = [str(years[-1]["th_id"])] if th in ("latest", ["latest"]) \
+            else [str(y["th_id"]) for y in years]
+    else:
+        ths = [th] if isinstance(th, str) else list(th)
+    rows = []
+    for t in ths:
+        rows += api.decode_rows(api.fetch_data(var, t))
+    return rows
 
 
 def load_rows(args):
@@ -207,17 +242,15 @@ def cmd_chart(args):
     rows, tag = load_rows(args)
     if not rows:
         sys.exit("No data returned; nothing to chart.")
-    spec = viz.build_spec(rows, opts_from_args(args))
+    cube = api.to_cube(rows)
     if args.json:
-        print(json.dumps(spec, ensure_ascii=False, indent=2))
+        print(json.dumps(cube, ensure_ascii=False, indent=2))
         return
-    print(f"\n  struktur : {spec['structure']}")
-    print(f"  grafik   : {spec['chart_label']}  ({spec['reason']})")
-    if spec["subtitle"]:
-        print(f"  filter   : {spec['subtitle']}")
-    out = args.out or f"chart_{api.sanitize(spec['title'] or tag, 50)}.html"
+    print(f"\n  struktur : {structure_of(cube)}")
+    out = args.out or f"chart_{api.sanitize(cube['title'] or tag, 50)}.html"
     path = out if os.path.isabs(out) else os.path.join(args.dir, out)
-    write_page([spec], path, spec["title"] or tag)
+    write_page([cube], path, cube["title"] or tag, opts_from_args(args))
+    print(f"  grafik   : dipilih otomatis saat halaman dibuka (docs/infer.js)")
     print(f"\nWrote {path}  ({os.path.getsize(path) / 1024:.0f} KB)")
 
 
@@ -226,35 +259,26 @@ def cmd_report(args):
     if args.limit:
         variables = variables[:args.limit]
     print(f"{len(variables)} variables in subject {args.subject}")
-    specs = []
+    cubes = []
     for i, v in enumerate(variables, 1):
         try:
-            years = api.get_years(v["var_id"])
-            if not years:
-                print(f"  [{i}/{len(variables)}] var {v['var_id']}: no periods, skipped")
-                continue
-            ths = [str(y["th_id"]) for y in years] if args.th == "all" \
-                else [str(years[-1]["th_id"])]
-            rows = []
-            for th in ths:
-                rows += api.decode_rows(api.fetch_data(v["var_id"], th))
+            rows = fetch_var_rows(v["var_id"], args.th)
             if not rows:
                 print(f"  [{i}/{len(variables)}] var {v['var_id']}: no data, skipped")
                 continue
-            spec = viz.build_spec(rows, opts_from_args(args))
-            specs.append(spec)
-            print(f"  [{i}/{len(variables)}] var {v['var_id']}: "
-                  f"{spec['chart_label']} ({spec['structure']})")
+            cube = api.to_cube(rows)
+            cubes.append(cube)
+            print(f"  [{i}/{len(variables)}] var {v['var_id']}: {structure_of(cube)}")
         except Exception as e:                       # one bad variable must not
             print(f"  [{i}/{len(variables)}] var {v['var_id']}: {e}")   # kill the report
-    if not specs:
+    if not cubes:
         sys.exit("Nothing to report.")
     subj = next((s["title"] for s in api.get_subjects()
                  if str(s["id"]) == str(args.subject)), f"Subjek {args.subject}")
     out = args.out or f"report_subject{args.subject}.html"
     path = out if os.path.isabs(out) else os.path.join(args.dir, out)
-    write_page(specs, path, f"{subj} — {len(specs)} grafik")
-    print(f"\nWrote {len(specs)} charts -> {path}  ({os.path.getsize(path) / 1024:.0f} KB)")
+    write_page(cubes, path, f"{subj} — {len(cubes)} grafik", opts_from_args(args))
+    print(f"\nWrote {len(cubes)} charts -> {path}  ({os.path.getsize(path) / 1024:.0f} KB)")
 
 
 def cmd_get(args):
@@ -308,7 +332,8 @@ def main():
     pc.add_argument("--th", nargs="+", default=["all"],
                     help="year id(s), 'all' (default), or 'latest'")
     pc.add_argument("--out", help="output .html file")
-    pc.add_argument("--json", action="store_true", help="print the chart spec instead")
+    pc.add_argument("--json", action="store_true",
+                    help="print the data cube instead of writing HTML")
     add_chart_opts(pc)
 
     pr = sub.add_parser("report", help="one HTML report for a whole subject")

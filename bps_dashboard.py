@@ -32,7 +32,6 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import bps_api as api
-import bps_viz as viz
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DOCS_DIR = os.path.join(SCRIPT_DIR, "docs")
@@ -106,28 +105,21 @@ def local_files():
     return out
 
 
-def spec_from_query(q):
-    """Build a chart spec from the request's query string."""
-    opts = {
-        "x": (q.get("x") or [None])[0],
-        "series": (q.get("series") or [None])[0],
-        "chart": (q.get("chart") or [None])[0],
-        "top": (q.get("top") or [None])[0],
-        "sort": (q.get("sort") or [None])[0],
-        "include_totals": (q.get("include_totals") or ["0"])[0] in ("1", "true", "on"),
-        "pick": {d: q[f"pick_{d}"][0] for d in ("vervar", "turvar", "time")
-                 if q.get(f"pick_{d}")},
-    }
+def cube_from_query(q):
+    """The chart-ready cube for a request. Which chart to draw from it is
+    decided in the browser (docs/infer.js), so the local app and the static
+    GitHub Pages build behave identically."""
     if q.get("file"):
         rows = rows_for_file(q["file"][0])
+        src = {"file": q["file"][0]}
     else:
-        rows = rows_for(q["var"][0], resolve_ths(q["var"][0], q.get("th") or ["all"]))
-    spec = viz.build_spec(rows, opts)
-    spec["source"] = {"file": (q.get("file") or [None])[0],
-                      "var": (q.get("var") or [None])[0],
-                      "th": q.get("th") or ["all"],
-                      "rows": len(rows)}
-    return spec
+        var = q["var"][0]
+        ths = resolve_ths(var, q.get("th") or ["all"])
+        rows = rows_for(var, ths)
+        src = {"var": var, "th": ths}
+    cube = api.to_cube(rows)
+    cube["source"] = dict(src, rows=len(rows))
+    return cube
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -218,12 +210,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, api.get_years(q["var"][0]))
             if path == "/api/localfiles":
                 return self._send(200, local_files())
-            if path == "/api/chart":
-                return self._send(200, spec_from_query(q))
-            if path == "/api/table":
-                spec = spec_from_query(q)
-                return self._send(200, {"x": spec["x"], "series": spec["series"],
-                                        "unit": spec["unit"], "title": spec["title"]})
+            if path == "/api/cube":
+                return self._send(200, cube_from_query(q))
             if path == "/api/data.csv":
                 if q.get("file"):
                     rows = rows_for_file(q["file"][0])

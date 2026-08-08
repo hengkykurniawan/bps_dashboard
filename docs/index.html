@@ -16,7 +16,8 @@
     <div class="sub">Data dinamis BPS &rarr; grafik. Jenis grafik mengikuti struktur variabel.</div>
   </div>
   <div class="spacer"></div>
-  <span id="conn" class="chip">memeriksa layanan…</span>
+  <select id="mode" title="Sumber data" hidden></select>
+  <span id="conn" class="chip">memeriksa sumber data…</span>
   <button id="theme" class="gho" type="button" title="Ganti tema terang/gelap">◐ Tema</button>
 </header>
 
@@ -162,6 +163,24 @@
       <p class="hint">Sumber data sama dengan
         <a href="https://github.com/hengkykurniawan/bps_download" target="_blank" rel="noopener">bps_download</a>:
         <code>webapi.bps.go.id</code> (Tabel Dinamis). Bedanya, keluarannya grafik, bukan tabel.</p>
+      <h2 style="margin-top:14px">Dua sumber data</h2>
+      <div class="table-view" style="max-height:none">
+        <table>
+          <thead><tr><th>Mode</th><th style="text-align:left">Isi</th><th style="text-align:left">Syarat</th></tr></thead>
+          <tbody>
+            <tr><td>◐ Data tersimpan</td>
+              <td style="text-align:left">Cuplikan JSON yang ikut tersimpan di repositori, disegarkan berkala oleh GitHub Actions</td>
+              <td style="text-align:left">Tidak perlu apa pun — berjalan penuh di browser</td></tr>
+            <tr><td>● Data langsung</td>
+              <td style="text-align:left">Seluruh variabel BPS, periode apa pun, selalu terbaru</td>
+              <td style="text-align:left">Jalankan <code>python bps_dashboard.py</code> di komputer sendiri</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="viz-note">Kunci API BPS tidak pernah ada di halaman ini. Mode tersimpan
+        memakai data yang sudah diambil sebelumnya; mode langsung memakai layanan lokal
+        yang menyimpan kuncinya sendiri. Jenis grafik ditentukan oleh kode yang sama
+        (<code>docs/infer.js</code>) pada kedua mode.</p>
       <h2 style="margin-top:14px">Bagaimana jenis grafik dipilih?</h2>
       <div class="table-view" style="max-height:none">
         <table>
@@ -187,6 +206,7 @@
   </section>
 </main>
 
+<script src="infer.js"></script>
 <script src="charts.js"></script>
 <script src="app.js"></script>
 </body>

@@ -1,16 +1,28 @@
 /* BPS Dashboard - UI.
  *
- * Talks to the local Python service (bps_dashboard.py) which holds the API key
- * and calls webapi.bps.go.id. When this page is served from GitHub Pages it
- * points at http://127.0.0.1:8766; when served by the app itself it uses the
- * same origin.
+ * Two data sources, one code path:
+ *
+ *   live   - the local Python service (bps_dashboard.py) holds the API key and
+ *            calls webapi.bps.go.id. Every one of BPS's ~1,700 variables, any
+ *            period, always current.
+ *   static - JSON cubes committed under docs/data/, refreshed by a scheduled
+ *            GitHub Action. No key, no local machine; only what was snapshotted.
+ *
+ * Either way the browser receives the same cube and docs/infer.js decides the
+ * chart, so both modes behave identically.
  */
 (function () {
   "use strict";
 
   var LOCAL = "http://127.0.0.1:8766";
-  var BASE = (location.protocol === "file:" || /github\.io$/.test(location.hostname))
-    ? LOCAL : "";
+  var SELF_HOSTED = location.port === "8766" ||
+    /^(127\.0\.0\.1|localhost)$/.test(location.hostname) && location.protocol !== "file:";
+  var API = SELF_HOSTED ? "" : LOCAL;
+  var DATA = "data/";
+
+  var MODE = "live";          // "live" | "static"
+  var CATALOG = null;         // static catalog, when docs/data/index.json exists
+  var LIVE_OK = false;
 
   var $ = function (id) { return document.getElementById(id); };
 
@@ -24,7 +36,7 @@
 
   function qs(params) {
     var p = [];
-    Object.keys(params).forEach(function (k) {
+    Object.keys(params || {}).forEach(function (k) {
       var v = params[k];
       if (v === null || v === undefined || v === "") return;
       p.push(encodeURIComponent(k) + "=" + encodeURIComponent(v));
@@ -32,18 +44,19 @@
     return p.length ? "?" + p.join("&") : "";
   }
 
-  function get(path, params) {
-    return fetch(BASE + path + qs(params || {}))
-      .then(function (r) {
-        return r.json().then(function (d) {
-          if (!r.ok) throw new Error(d && d.error ? d.error : "HTTP " + r.status);
-          return d;
-        });
-      });
+  function getJSON(url, opts) {
+    return fetch(url, opts).then(function (r) {
+      return r.json().then(function (d) {
+        if (!r.ok) throw new Error(d && d.error ? d.error : "HTTP " + r.status);
+        return d;
+      }, function () { throw new Error("HTTP " + r.status); });
+    });
   }
 
+  function api(path, params) { return getJSON(API + path + qs(params)); }
+
   function post(path, body) {
-    return fetch(BASE + path, {
+    return fetch(API + path, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body || {})
     }).then(function (r) { return r.json(); });
@@ -63,6 +76,36 @@
       .replace(/^-|-$/g, "").slice(0, 60) || "chart";
   }
 
+  // ---------------------------------------------------------------- sources
+
+  var CUBES = {};      // ref -> cube, so flipping options never refetches
+
+  function fetchCube(ref) {
+    var key = JSON.stringify(ref);
+    if (CUBES[key]) return Promise.resolve(CUBES[key]);
+    var p = ref.data ? getJSON(DATA + ref.data) : api("/api/cube", ref);
+    return p.then(function (cube) { CUBES[key] = cube; return cube; });
+  }
+
+  function listSubjects() {
+    if (MODE === "static") return Promise.resolve(CATALOG.subjects);
+    return api("/api/subjects");
+  }
+
+  function listVars(subject) {
+    if (MODE === "static") return Promise.resolve(CATALOG.vars[subject] || []);
+    return api("/api/vars", { subject: subject });
+  }
+
+  function listYears(varId) {
+    if (MODE === "static") return Promise.resolve([]);
+    return api("/api/years", { var: varId });
+  }
+
+  function cubeRefFor(v, th) {
+    return MODE === "static" ? { data: v.file } : { var: v.var_id, th: th };
+  }
+
   // ---------------------------------------------------------------- shell
 
   document.querySelectorAll("nav button").forEach(function (b) {
@@ -80,8 +123,7 @@
 
   $("theme").addEventListener("click", function () {
     var cur = document.documentElement.getAttribute("data-theme");
-    var dark = cur ? cur === "dark"
-      : matchMedia("(prefers-color-scheme: dark)").matches;
+    var dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
     document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
     try { localStorage.setItem("bps-theme", dark ? "light" : "dark"); } catch (e) { }
     redraw();
@@ -97,24 +139,92 @@
     b.textContent = msg || "";
   }
 
-  get("/api/health").then(function (d) {
-    $("conn").textContent = d.key_set ? "terhubung" : "terhubung · kunci API belum diisi";
+  function applyMode() {
+    var live = MODE === "live";
+    $("view-files").hidden = true;
+    document.querySelector('nav button[data-view="files"]').hidden = !live;
+    document.querySelector('nav button[data-view="settings"]').hidden = !live;
+    var sel = $("mode");
+    sel.textContent = "";
+    if (LIVE_OK) {
+      var o = document.createElement("option");
+      o.value = "live"; o.textContent = "● Data langsung (layanan lokal)";
+      sel.appendChild(o);
+    }
+    if (CATALOG) {
+      var s = document.createElement("option");
+      s.value = "static";
+      s.textContent = "◐ Data tersimpan (" + (CATALOG.generated || "").slice(0, 10) + ")";
+      sel.appendChild(s);
+    }
+    sel.value = MODE;
+    sel.hidden = sel.options.length < 2;
+  }
+
+  var HEALTH = null;
+
+  function showModeStatus() {
+    if (MODE === "live") {
+      $("conn").textContent = HEALTH && HEALTH.key_set
+        ? "layanan lokal terhubung" : "layanan lokal terhubung · kunci API belum diisi";
+      banner(HEALTH && !HEALTH.key_set
+        ? "Belum ada kunci API BPS. Isi di tab Pengaturan, atau tulis ke file .bps_key."
+        : "");
+    } else if (CATALOG) {
+      $("conn").textContent = "data tersimpan · " + (CATALOG.variable_count || 0) + " variabel";
+      banner("Menampilkan data tersimpan di repositori (diperbarui " +
+        (CATALOG.generated || "?").slice(0, 10) + "). Untuk seluruh " +
+        (CATALOG.total_variables || "±1.700") + " variabel BPS dan periode apa pun, " +
+        "jalankan layanan lokal (python bps_dashboard.py) lalu muat ulang halaman ini.");
+    } else {
+      $("conn").textContent = "tidak ada sumber data";
+      banner("Tidak dapat menghubungi layanan lokal di " + LOCAL +
+        " dan tidak ada data tersimpan. Jalankan `python bps_dashboard.py` " +
+        "(atau klik dua kali \"Start BPS Dashboard.bat\") lalu muat ulang halaman ini.");
+    }
     $("conn").classList.add("strong");
-    if (!d.key_set) banner("Belum ada kunci API BPS. Isi di tab Pengaturan, atau tulis ke file .bps_key.");
+  }
+
+  function boot() {
+    // The static catalog is what makes the published site work with no local
+    // machine; the live probe upgrades it when the service happens to be up.
+    var cat = getJSON(DATA + "index.json").then(function (c) { CATALOG = c; })
+      .catch(function () { CATALOG = null; });
+    var live = api("/api/health").then(function (d) {
+      LIVE_OK = true;
+      return d;
+    }).catch(function () { LIVE_OK = false; return null; });
+
+    Promise.all([cat, live]).then(function (r) {
+      HEALTH = r[1];
+      MODE = LIVE_OK ? "live" : (CATALOG ? "static" : "live");
+      applyMode();
+      showModeStatus();
+      loadSubjects();
+    });
+  }
+
+  $("mode").addEventListener("change", function () {
+    MODE = $("mode").value;
+    CUBES = {};
+    S = freshState();
+    $("card-vars").hidden = true;
+    $("card-chart").hidden = true;
+    applyMode();
+    showModeStatus();
     loadSubjects();
-  }).catch(function () {
-    $("conn").textContent = "layanan lokal mati";
-    banner("Tidak dapat menghubungi layanan lokal di " + LOCAL +
-      ". Jalankan `python bps_dashboard.py` (atau klik dua kali \"Start BPS Dashboard.bat\") lalu muat ulang halaman ini.");
   });
 
   // ---------------------------------------------------------------- state
 
-  var S = {
-    subject: null, subjectTitle: "", varId: null, varTitle: "",
-    years: [], th: "latest", opts: {}, hidden: new Set(), spec: null
-  };
-  var F = { file: null, opts: {}, hidden: new Set(), spec: null };
+  function freshState() {
+    return {
+      subject: null, subjectTitle: "", varId: null, varTitle: "", varRec: null,
+      years: [], th: "latest", opts: {}, hidden: new Set(), spec: null, cube: null
+    };
+  }
+  var S = freshState();
+  var F = { file: null, opts: {}, hidden: new Set(), spec: null, cube: null };
 
   function redraw() {
     if (S.spec) drawInto($("chart"), S.spec, S.hidden);
@@ -130,7 +240,9 @@
   var SUBJECTS = [];
 
   function loadSubjects() {
-    get("/api/subjects").then(function (rows) {
+    $("subjects").textContent = "";
+    htm("p", "muted", $("subjects"), "memuat…");
+    listSubjects().then(function (rows) {
       SUBJECTS = rows;
       renderSubjects();
       var sel = $("g-subject");
@@ -159,18 +271,18 @@
     var groups = {};
     rows.forEach(function (s) { (groups[s.subcat] = groups[s.subcat] || []).push(s); });
     var table = htm("table", null, box);
-    var thead = htm("thead", null, table);
-    var tr = htm("tr", null, thead);
+    var tr = htm("tr", null, htm("thead", null, table));
     htm("th", null, tr, "Subjek");
     htm("th", null, tr, "Kategori");
-    htm("th", "num", tr, "Tabel");
+    htm("th", "num", tr, MODE === "static" ? "Grafik" : "Tabel");
     var tb = htm("tbody", null, table);
     Object.keys(groups).sort().forEach(function (cat) {
       groups[cat].forEach(function (s) {
         var r = htm("tr", "clk" + (S.subject == s.id ? " on" : ""), tb);
         htm("td", null, r, s.id + " — " + s.title);
         htm("td", "muted", r, cat);
-        htm("td", "num muted", r, s.ntabel || "");
+        htm("td", "num muted", r,
+          MODE === "static" ? ((CATALOG.vars[s.id] || []).length || "") : (s.ntabel || ""));
         r.addEventListener("click", function () { pickSubject(s); });
       });
     });
@@ -188,7 +300,7 @@
     $("vars-hint").textContent = "Variabel dinamis di subjek " + s.id + " — " + s.title + ".";
     $("vars").textContent = "";
     htm("p", "muted", $("vars"), "memuat…");
-    get("/api/vars", { subject: s.id }).then(function (rows) {
+    listVars(s.id).then(function (rows) {
       VARS = rows;
       renderVars();
     }).catch(function (e) {
@@ -206,6 +318,12 @@
     });
     var box = $("vars");
     box.textContent = "";
+    if (!VARS.length) {
+      htm("p", "muted", box, MODE === "static"
+        ? "Subjek ini belum ada dalam data tersimpan. Jalankan layanan lokal untuk semua variabel."
+        : "Tidak ada variabel.");
+      return;
+    }
     var table = htm("table", null, box);
     var tr = htm("tr", null, htm("thead", null, table));
     htm("th", null, tr, "Variabel");
@@ -223,14 +341,14 @@
   }
 
   function pickVar(v) {
-    S.varId = v.var_id; S.varTitle = v.title;
-    S.opts = {}; S.hidden = new Set(); S.th = "latest";
+    S.varId = v.var_id; S.varTitle = v.title; S.varRec = v;
+    S.opts = {}; S.hidden = new Set();
     renderVars();
     $("card-chart").hidden = false;
     $("chart-title").textContent = v.title;
-    $("chart-sub").textContent = "memuat periode…";
+    $("chart-sub").textContent = "memuat…";
     $("card-chart").scrollIntoView({ behavior: "smooth", block: "start" });
-    get("/api/years", { var: v.var_id }).then(function (ys) {
+    listYears(v.var_id).then(function (ys) {
       S.years = ys;
       S.th = ys.length ? String(ys[ys.length - 1].th_id) : "latest";
       requestChart();
@@ -243,37 +361,31 @@
 
   // ---------------------------------------------------------------- chart
 
-  function chartParams(opts, extra) {
-    var p = {
+  function specOpts(opts) {
+    return {
       x: opts.x, series: opts.series, chart: opts.chart,
-      top: opts.top, sort: opts.sort,
-      include_totals: opts.include_totals ? 1 : null
+      top: opts.top, sort: opts.sort, includeTotals: !!opts.include_totals,
+      pick: {
+        vervar: opts.pick_vervar, turvar: opts.pick_turvar, time: opts.pick_time
+      }
     };
-    ["vervar", "turvar", "time"].forEach(function (d) {
-      if (opts["pick_" + d]) p["pick_" + d] = opts["pick_" + d];
-    });
-    return Object.assign(p, extra || {});
   }
 
   function requestChart() {
     var box = $("chart");
     box.classList.add("loading");
-    if (!box.firstChild) {
+    if (!box.firstChild) htm("p", "muted", box, "memuat data…");
+    fetchCube(cubeRefFor(S.varRec, S.th)).then(function (cube) {
+      S.cube = cube;
+      S.spec = BPSInfer.buildSpec(cube, specOpts(S.opts));
+      box.classList.remove("loading");
+      paint(S.spec, S, $("chart-title"), $("chart-sub"), $("chart-chips"),
+        $("controls"), $("chart"), $("table"), requestChart, MODE === "live");
+    }).catch(function (e) {
+      box.classList.remove("loading");
       box.textContent = "";
-      htm("p", "muted", box, "memuat data…");
-    }
-    get("/api/chart", chartParams(S.opts, { var: S.varId, th: S.th }))
-      .then(function (spec) {
-        S.spec = spec;
-        box.classList.remove("loading");
-        paint(spec, S, $("chart-title"), $("chart-sub"), $("chart-chips"),
-          $("controls"), $("chart"), $("table"), requestChart, true);
-      })
-      .catch(function (e) {
-        box.classList.remove("loading");
-        box.textContent = "";
-        htm("p", "err", box, "Gagal memuat data: " + e.message);
-      });
+      htm("p", "err", box, "Gagal memuat data: " + e.message);
+    });
   }
 
   function drawInto(box, spec, hidden) {
@@ -298,8 +410,8 @@
     htm("span", "chip strong", elChips, spec.chart_label);
     htm("span", "chip", elChips, spec.structure);
     htm("span", "chip", elChips, spec.reason);
-    if (spec.source && spec.source.rows) {
-      htm("span", "chip", elChips, spec.source.rows.toLocaleString("id-ID") + " baris data");
+    if (st.cube && st.cube.source && st.cube.source.rows) {
+      htm("span", "chip", elChips, st.cube.source.rows.toLocaleString("id-ID") + " baris data");
     }
 
     buildControls(spec, st, elControls, onChange, withYears);
@@ -334,7 +446,9 @@
       st.years.slice().reverse().forEach(function (y) {
         yopts.push({ value: String(y.th_id), label: String(y.th) });
       });
-      select(box, "Tahun", yopts, st.th, function (v) { st.th = v; st.hidden.clear(); onChange(); });
+      select(box, "Tahun", yopts, st.th, function (v) {
+        st.th = v; st.hidden.clear(); onChange();
+      });
     }
 
     var copts = [{ value: "auto", label: "Otomatis (" + labelOf(spec.auto_chart, spec) + ")" }];
@@ -367,10 +481,8 @@
       var dim = spec.dims[d];
       if (!dim || !dim.n || dim.degenerate) return;
       var opts = [];
-      if (dim.additive && d !== "time") {
-        opts.push({ value: "__sum__", label: "▣ Jumlah semua" });
-        opts.push({ value: "__avg__", label: "▣ Rata-rata" });
-      } else if (d !== "time") {
+      if (d !== "time") {
+        if (dim.additive) opts.push({ value: "__sum__", label: "▣ Jumlah semua" });
         opts.push({ value: "__avg__", label: "▣ Rata-rata" });
       }
       dim.members.forEach(function (m) {
@@ -425,9 +537,7 @@
     spec.x.categories.forEach(function (c, i) {
       var r = htm("tr", null, tb);
       htm("td", null, r, c.full || c.label);
-      spec.series.forEach(function (s) {
-        htm("td", null, r, BPSChart.fmt(s.values[i]));
-      });
+      spec.series.forEach(function (s) { htm("td", null, r, BPSChart.fmt(s.values[i])); });
     });
   }
 
@@ -466,17 +576,21 @@
           document.body.appendChild(a); a.click(); a.remove();
         });
       };
-      img.src = "data:image/svg+xml;base64," +
-        btoa(unescape(encodeURIComponent(svg)));
+      img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svg)));
     });
   }
 
   wireButtons("", function () { return S; }, $("chart"), $("table"));
   wireButtons("f", function () { return F; }, $("fchart"), $("ftable"));
 
+  // CSV: from the service when it is running, otherwise straight from the cube
   $("btn-csv").addEventListener("click", function () {
-    if (!S.varId) return;
-    location.href = BASE + "/api/data.csv" + qs({ var: S.varId, th: S.th });
+    if (MODE === "live" && S.varId) {
+      location.href = API + "/api/data.csv" + qs({ var: S.varId, th: S.th });
+    } else if (S.cube) {
+      download("data_var" + S.cube.var_id + ".csv", BPSInfer.toCSV(S.cube),
+        "text/csv;charset=utf-8");
+    }
   });
 
   // ---------------------------------------------------------------- gallery
@@ -494,33 +608,33 @@
     var limit = +$("g-count").value;
     var box = $("gallery");
     box.textContent = "";
-    var info = htm("div", "card", box);
-    htm("p", "muted", info, "memuat daftar variabel…");
-    get("/api/vars", { subject: subject }).then(function (vars) {
+    htm("p", "muted", htm("div", "card", box), "memuat daftar variabel…");
+    listVars(subject).then(function (vars) {
       box.textContent = "";
       var list = vars.slice(0, limit);
-      if (!list.length) { htm("p", "muted", htm("div", "card", box), "Tidak ada variabel."); return; }
-      var queue = [];
-      list.forEach(function (v) {
+      if (!list.length) {
+        htm("p", "muted", htm("div", "card", box), "Tidak ada variabel untuk subjek ini.");
+        return;
+      }
+      var queue = list.map(function (v) {
         var card = htm("div", "card", box);
         htm("p", "chart-title", card, v.title);
         htm("p", "chart-sub", card, "var " + v.var_id + (v.unit ? " · " + v.unit : ""));
         var chips = htm("div", "chips", card);
         var plot = htm("div", null, card);
         htm("p", "muted", plot, "menunggu…");
-        queue.push({ v: v, card: card, chips: chips, plot: plot, done: false });
+        return { v: v, card: card, chips: chips, plot: plot, done: false };
       });
       pump(queue);
     });
   }
 
   function pump(queue) {
-    var running = 0, i = 0;
+    var running = 0;
     var io = new IntersectionObserver(function (entries) {
       entries.forEach(function (en) {
-        if (!en.isIntersecting) return;
         var item = queue.filter(function (q) { return q.card === en.target; })[0];
-        if (item && !item.done) { item.wanted = true; next(); }
+        if (en.isIntersecting && item && !item.done) { item.wanted = true; next(); }
       });
     }, { rootMargin: "300px" });
     queue.forEach(function (q) { io.observe(q.card); });
@@ -535,28 +649,25 @@
         if (!item) return;
         item.busy = true; running++;
         item.plot.textContent = "";
-        var sp = htm("p", "muted", item.plot);
-        htm("span", "spinner", sp);
-        get("/api/chart", { var: item.v.var_id, th: "latest" })
-          .then(function (spec) {
-            item.done = true; running--;
-            item.plot.textContent = "";
-            item.chips.textContent = "";
-            htm("span", "chip strong", item.chips, spec.chart_label);
-            htm("span", "chip", item.chips, spec.structure);
-            if (spec.subtitle) htm("span", "chip", item.chips, spec.subtitle);
-            BPSChart.render(item.plot, spec, {
-              hidden: new Set(), height: 240,
-              onToggle: function () { }
-            });
-            next();
-          })
-          .catch(function (e) {
-            item.done = true; running--;
-            item.plot.textContent = "";
-            htm("p", "err", item.plot, e.message);
-            next();
+        htm("span", "spinner", htm("p", "muted", item.plot));
+        fetchCube(cubeRefFor(item.v, "latest")).then(function (cube) {
+          item.done = true; running--;
+          var spec = BPSInfer.buildSpec(cube, {});
+          item.plot.textContent = "";
+          item.chips.textContent = "";
+          htm("span", "chip strong", item.chips, spec.chart_label);
+          htm("span", "chip", item.chips, spec.structure);
+          if (spec.subtitle) htm("span", "chip", item.chips, spec.subtitle);
+          BPSChart.render(item.plot, spec, {
+            hidden: new Set(), height: 240, onToggle: function () { }
           });
+          next();
+        }).catch(function (e) {
+          item.done = true; running--;
+          item.plot.textContent = "";
+          htm("p", "err", item.plot, e.message);
+          next();
+        });
       }
     }
   }
@@ -567,7 +678,7 @@
     var box = $("files");
     box.textContent = "";
     htm("p", "muted", box, "memuat…");
-    get("/api/localfiles").then(function (rows) {
+    api("/api/localfiles").then(function (rows) {
       box.textContent = "";
       if (!rows.length) {
         htm("p", "muted", box, "Belum ada CSV tidy di folder aplikasi. " +
@@ -599,10 +710,11 @@
   function requestFileChart() {
     var box = $("fchart");
     box.classList.add("loading");
-    get("/api/chart", chartParams(F.opts, { file: F.file })).then(function (spec) {
-      F.spec = spec;
+    fetchCube({ file: F.file }).then(function (cube) {
+      F.cube = cube;
+      F.spec = BPSInfer.buildSpec(cube, specOpts(F.opts));
       box.classList.remove("loading");
-      paint(spec, F, $("fchart-title"), $("fchart-sub"), $("fchart-chips"),
+      paint(F.spec, F, $("fchart-title"), $("fchart-sub"), $("fchart-chips"),
         $("fcontrols"), $("fchart"), $("ftable"), requestFileChart, false);
     }).catch(function (e) {
       box.classList.remove("loading");
@@ -616,13 +728,13 @@
   var settingsReady = false;
 
   function loadSettings() {
-    get("/api/settings").then(function (s) {
+    api("/api/settings").then(function (s) {
       $("s-lang").value = s.lang;
       $("s-status").textContent = s.key_set
         ? "Kunci API aktif (" + s.key_masked + ")." : "Belum ada kunci API.";
       if (!settingsReady) {
         settingsReady = true;
-        get("/api/domains").then(function (ds) {
+        api("/api/domains").then(function (ds) {
           var sel = $("s-domain");
           sel.textContent = "";
           ds.forEach(function (d) {
@@ -634,10 +746,10 @@
         }).catch(function () { });
         $("s-save").addEventListener("click", function () {
           post("/api/settings", {
-            domain: $("s-domain").value, lang: $("s-lang").value,
-            key: $("s-key").value
+            domain: $("s-domain").value, lang: $("s-lang").value, key: $("s-key").value
           }).then(function () {
             $("s-key").value = "";
+            CUBES = {};
             $("s-status").textContent = "Tersimpan. Memuat ulang subjek…";
             loadSubjects();
             loadSettings();
@@ -645,6 +757,7 @@
         });
         $("s-clear").addEventListener("click", function () {
           post("/api/clear_cache").then(function (d) {
+            CUBES = {};
             $("s-status").textContent = "Cache dikosongkan (" + (d.removed || 0) + " berkas).";
           });
         });
@@ -653,4 +766,6 @@
       $("s-status").textContent = e.message;
     });
   }
+
+  boot();
 })();

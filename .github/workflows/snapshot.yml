@@ -1,0 +1,69 @@
+name: Refresh data snapshot
+
+# Rebuilds docs/data/ from webapi.bps.go.id and commits it, so the published
+# site keeps showing current numbers without anyone running anything locally.
+#
+# Requires one repository secret: BPS_KEY (Settings -> Secrets and variables ->
+# Actions -> New repository secret). The key is written to .bps_key for the
+# duration of the run, is never committed (.gitignore) and never reaches the
+# published page -- the browser only ever sees the resulting JSON.
+
+on:
+  schedule:
+    - cron: "0 22 * * 0"        # Mondays 05:00 WIB
+  workflow_dispatch:
+    inputs:
+      subjects:
+        description: "Subject ids to snapshot (digits and spaces only)"
+        default: "520 530 531"
+      th:
+        description: "Periods per variable"
+        default: "latest"
+        type: choice
+        options: ["latest", "all"]
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Check the key is configured
+        env:
+          BPS_KEY: ${{ secrets.BPS_KEY }}
+        run: |
+          if [ -z "$BPS_KEY" ]; then
+            echo "::error::Repository secret BPS_KEY is not set - add it in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          printf '%s' "$BPS_KEY" > .bps_key
+
+      - name: Build the snapshot
+        env:
+          SUBJECTS: ${{ inputs.subjects || '520 530 531' }}
+          TH: ${{ inputs.th || 'latest' }}
+        run: |
+          # the input reaches a shell, so it is validated rather than trusted
+          echo "$SUBJECTS" | grep -Eq '^[0-9]+( [0-9]+)*$' || {
+            echo "::error::subjects must be digits separated by spaces"; exit 1; }
+          python bps_snapshot.py --subject $SUBJECTS --th "$TH"
+
+      - name: Commit if anything changed
+        run: |
+          rm -f .bps_key
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- docs/data; then
+            echo "Snapshot unchanged; nothing to commit."
+          else
+            git add docs/data
+            git commit -m "Refresh BPS data snapshot ($(date -u +%Y-%m-%d))"
+            git push
+          fi

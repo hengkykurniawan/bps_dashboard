@@ -246,6 +246,97 @@ def get_rows(var, ths, domain=None, lang=None):
     return rows
 
 
+def _short_period(period):
+    """'Triwulan I' -> 'TW I'; annual periods carry no sub-year label."""
+    p = (period or "").strip()
+    if not p or p.lower() == "tahun":
+        return ""
+    p = re.sub(r"^Triwulan\s+", "TW ", p, flags=re.I)
+    p = re.sub(r"^Semester\s+", "Sem ", p, flags=re.I)
+    p = re.sub(r"^Kuartal\s+", "TW ", p, flags=re.I)
+    return p[:12]
+
+
+def _num(v):
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip().replace(",", ".")
+    if not s or s in {"-", "--", "...", "…", "NA", "N/A"}:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def to_cube(rows):
+    """Compact, chart-ready form of the tidy rows.
+
+    The browser does the charting (docs/infer.js decides the chart type, so the
+    decision lives in exactly one place), and this is what it consumes: the
+    three dimensions plus a dense [vervar][turvar][time] grid of values. It is
+    the same payload whether it comes live from the local service or from a
+    committed snapshot under docs/data/."""
+    vervar, turvar, time = {}, {}, {}
+    for r in rows:
+        vid = str(r["vervar_id"])
+        if vid not in vervar:
+            vervar[vid] = clean(r["vervar"]) or ""
+        tid = str(r["turvar_id"])
+        if tid not in turvar:
+            turvar[tid] = clean(r["turvar"]) or ""
+        key = f"{r['year_id']}|{r['period_id']}"
+        if key not in time:
+            short = _short_period(r["period"])
+            time[key] = (
+                int(str(r["year_id"] or 0) or 0), int(str(r["period_id"] or 0) or 0),
+                f"{r['year']} {short}".strip() if short else str(r["year"]),
+                f"{r['year']} {r['period']}".strip() if short else str(r["year"]))
+
+    vv = [[k, v] for k, v in vervar.items()]
+    tv = [[k, v] for k, v in turvar.items()]
+    tt = sorted(time.items(), key=lambda kv: (kv[1][0], kv[1][1]))
+    ti = [[k, v[2], v[3]] for k, v in tt]
+
+    vidx = {k: i for i, (k, _) in enumerate(vv)}
+    tidx = {k: i for i, (k, _) in enumerate(tv)}
+    pidx = {k: i for i, (k, _, _) in enumerate(ti)}
+    values = [[[None] * len(ti) for _ in tv] for _ in vv]
+    for r in rows:
+        v = _num(r.get("value"))
+        if v is None:
+            continue
+        values[vidx[str(r["vervar_id"])]][tidx[str(r["turvar_id"])]][
+            pidx[f"{r['year_id']}|{r['period_id']}"]] = v
+
+    meta = var_meta(rows)
+    return {"var_id": meta["var_id"], "title": meta["title"], "unit": meta["unit"],
+            "vervar": vv, "turvar": tv, "time": ti, "values": values}
+
+
+def from_cube(cube):
+    """Tidy rows back out of a cube -- used for the CSV export."""
+    rows = []
+    for vi, (vid, vlabel) in enumerate(cube["vervar"]):
+        for ti, (tid, tlabel) in enumerate(cube["turvar"]):
+            for pi, entry in enumerate(cube["time"]):
+                v = cube["values"][vi][ti][pi]
+                if v is None:
+                    continue
+                year_id, period_id = entry[0].split("|")
+                rows.append({
+                    "var_id": cube["var_id"], "variable": cube["title"],
+                    "unit": cube["unit"], "vervar_id": vid, "vervar": vlabel,
+                    "turvar_id": tid, "turvar": tlabel,
+                    "year_id": year_id, "year": entry[2].split(" ")[0],
+                    "period_id": period_id,
+                    "period": " ".join(entry[2].split(" ")[1:]) or "Tahun",
+                    "value": v})
+    return rows
+
+
 def read_csv_rows(path):
     """Load tidy rows from a CSV written by this repo or by bps_download."""
     opener = gzip.open if path.endswith(".gz") else open

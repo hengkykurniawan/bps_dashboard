@@ -11,8 +11,25 @@ Same data source as **[bps_download](https://github.com/hengkykurniawan/bps_down
 **graphics instead of tables**, and *the chart type is chosen from the structure
 of each variable*.
 
-**Same folder, same key, no installs.** Pure Python 3 standard library, no CDN,
-no JavaScript dependencies. The API key is read from `.bps_key` in this folder.
+**No installs, no dependencies.** Pure Python 3 standard library on the server
+side, plain JavaScript in the browser: no CDN, no build step, no packages.
+
+## Two ways to use it
+
+| | **Online** — the link above | **Local** — `python bps_dashboard.py` |
+|---|---|---|
+| Needs | nothing; runs in the browser | Python 3 and your BPS API key |
+| Data | a snapshot committed to `docs/data/`, refreshed weekly by GitHub Actions | live from `webapi.bps.go.id` |
+| Covers | the snapshotted subjects (currently 520, 530, 531) | every BPS variable, every period, always current |
+| Charts | identical — both run `docs/infer.js` in the browser | identical |
+
+The published page detects a running local service and offers both as a picker
+in the header; with no service it simply uses the snapshot.
+
+**The API key is never in the page.** A static site cannot hold a secret, so the
+online build charts data that was fetched beforehand — by you, or by the
+scheduled workflow using a repository secret. The key lives only in `.bps_key`
+on your machine, or in the Actions secret.
 
 ## Quick start
 
@@ -63,10 +80,37 @@ hours in `cache/` so flipping chart options does not re-hit the API.
 
 ---
 
+---
+
+## 📸 The online build — `bps_snapshot.py`
+
+The published site reads JSON committed under `docs/data/`: `index.json` (the
+catalogue) plus one cube per variable. Rebuild or extend it with:
+
+```bash
+python bps_snapshot.py --subject 530 531           # snapshot two subjects
+python bps_snapshot.py --subject 520 --limit 45     # add another, incrementally
+python bps_snapshot.py --subject 531 --th all       # every period, not just the latest
+```
+
+Runs merge, so subjects can be added one at a time; cubes no longer referenced
+are pruned (`--keep` disables that), and anything bigger than `--max-kb`
+(default 900) is skipped so the repository stays small. The current snapshot is
+~1 MB for 117 variables.
+
+**Automatic weekly refresh:** `.github/workflows/snapshot.yml` runs the same
+command in CI and commits the result. It needs one repository secret named
+**`BPS_KEY`** (Settings → Secrets and variables → Actions). Without it the
+workflow fails with a clear message and the committed snapshot simply stays as
+it is. Edit the `subjects` default in that file to change what gets published,
+or run it by hand from the Actions tab.
+
+---
+
 ## How the chart type is chosen
 
 This is the whole point of the repo, so it is a table, not a heuristic buried in
-the code (see `bps_viz.py`). Each BPS variable is a cube of
+the code (see `docs/infer.js`). Each BPS variable is a cube of
 **entities (`vervar`) × categories (`turvar`) × periods (year × sub-year)**.
 After the roles are assigned — time takes the x axis whenever it varies, the
 smaller remaining dimension takes colour, the larger one is held fixed with a
@@ -139,11 +183,12 @@ python bps_chart.py get --var 2776 --th all
 ```
 
 Overrides: `--chart`, `--x`, `--series`, `--pick-vervar/-turvar/-time`, `--top`,
-`--sort`, `--include-totals`. `--json` prints the chart spec instead of writing
+`--sort`, `--include-totals`. `--json` prints the data cube instead of writing
 HTML — handy for scripting or for feeding another renderer.
 
 The generated HTML is standalone: no network, no CDN, opens anywhere, and each
-chart keeps its table view.
+chart keeps its table view. It carries its own copy of `infer.js`, so the chart
+type is decided by the same code the app uses, when the page opens.
 
 ---
 
@@ -151,11 +196,19 @@ chart keeps its table view.
 
 | File | Role |
 |---|---|
-| `bps_api.py` | BPS WebAPI: key, paging, the data cube, and its decoding into tidy rows |
-| `bps_viz.py` | The decision table above: dimensions → chart spec |
+| `bps_api.py` | BPS WebAPI: key, paging, decoding into tidy rows and into the chart-ready cube |
 | `bps_dashboard.py` | The local web app (HTTP + static files, stdlib only) |
 | `bps_chart.py` | Command-line charts and reports |
-| `docs/` | The front-end — `charts.js` (SVG renderer), `app.js`, `styles.css`; also the GitHub Pages entry point |
+| `bps_snapshot.py` | Builds `docs/data/` for the online build |
+| `docs/infer.js` | **The decision table above** — dimensions → chart spec |
+| `docs/charts.js` | The SVG renderer |
+| `docs/app.js`, `docs/index.html`, `docs/styles.css` | The UI, and the GitHub Pages entry point |
+| `docs/data/` | The committed snapshot the online build reads |
+
+The chart decision lives in **one** place, `docs/infer.js`, and runs in the
+browser — so the local app, the published site and the HTML that `bps_chart.py`
+exports all reach the same conclusion from the same code. Python fetches and
+decodes; it never decides what a chart should be.
 
 ## Notes
 
