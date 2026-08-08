@@ -1,0 +1,23 @@
+# Local credentials -- never commit the BPS API key
+.bps_key
+
+# Python runtime files
+__pycache__/
+*.py[cod]
+
+# Cached API responses and generated output
+cache/
+data_var*.csv
+data_var*.csv.gz
+chart_*.html
+report_*.html
+*.png
+*.svg
+
+# Local editor and OS files
+.venv/
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db

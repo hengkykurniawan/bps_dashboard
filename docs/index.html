@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BPS Dashboard — grafik data BPS</title>
+<meta name="description" content="Visualisasi data dinamis BPS (webapi.bps.go.id). Jenis grafik dipilih otomatis dari struktur tiap variabel.">
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%232a78d6'/><rect x='3' y='8' width='2.4' height='5' fill='white'/><rect x='6.8' y='5' width='2.4' height='8' fill='white'/><rect x='10.6' y='3' width='2.4' height='10' fill='white'/></svg>">
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>BPS Dashboard</h1>
+    <div class="sub">Data dinamis BPS &rarr; grafik. Jenis grafik mengikuti struktur variabel.</div>
+  </div>
+  <div class="spacer"></div>
+  <span id="conn" class="chip">memeriksa layanan…</span>
+  <button id="theme" class="gho" type="button" title="Ganti tema terang/gelap">◐ Tema</button>
+</header>
+
+<nav>
+  <button data-view="explore" class="on">Jelajah</button>
+  <button data-view="gallery">Galeri subjek</button>
+  <button data-view="files">File lokal</button>
+  <button data-view="settings">Pengaturan</button>
+  <button data-view="about">Tentang</button>
+</nav>
+
+<main>
+  <div id="banner" class="banner" hidden></div>
+
+  <!-- ------------------------------------------------------ explore -->
+  <section id="view-explore">
+    <div class="card">
+      <h2>1 · Subjek</h2>
+      <p class="hint">37 subjek statistik BPS — sama dengan <code>subject=</code> di situs BPS.</p>
+      <div class="filters">
+        <div class="field">
+          <label for="q-subject">Cari subjek</label>
+          <input id="q-subject" type="search" placeholder="mis. neraca, harga, tenaga kerja">
+        </div>
+      </div>
+      <div class="list" id="subjects"><p class="muted">memuat…</p></div>
+    </div>
+
+    <div class="card" id="card-vars" hidden>
+      <h2>2 · Variabel</h2>
+      <p class="hint" id="vars-hint"></p>
+      <div class="filters">
+        <div class="field">
+          <label for="q-var">Cari variabel</label>
+          <input id="q-var" type="search" placeholder="cari judul variabel">
+        </div>
+      </div>
+      <div class="list" id="vars"></div>
+    </div>
+
+    <div class="card" id="card-chart" hidden>
+      <div class="chart-head">
+        <div style="flex:1 1 320px">
+          <p class="chart-title" id="chart-title"></p>
+          <p class="chart-sub" id="chart-sub"></p>
+        </div>
+        <div>
+          <button class="gho" id="btn-table" type="button">Tabel</button>
+          <button class="gho" id="btn-svg" type="button">SVG</button>
+          <button class="gho" id="btn-png" type="button">PNG</button>
+          <button class="gho" id="btn-csv" type="button">CSV</button>
+        </div>
+      </div>
+      <div class="chips" id="chart-chips"></div>
+      <div class="filters" id="controls" style="margin-top:12px"></div>
+      <div id="chart"></div>
+      <div class="table-view" id="table" hidden></div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------ gallery -->
+  <section id="view-gallery" hidden>
+    <div class="card">
+      <h2>Galeri subjek</h2>
+      <p class="hint">Setiap variabel dalam satu subjek digambar otomatis (periode terbaru).
+        Grafik dimuat saat digulir agar tidak membanjiri API BPS.</p>
+      <div class="filters">
+        <div class="field">
+          <label for="g-subject">Subjek</label>
+          <select id="g-subject"></select>
+        </div>
+        <div class="field">
+          <label for="g-count">Jumlah variabel</label>
+          <select id="g-count">
+            <option>12</option><option>24</option><option>48</option><option>200</option>
+          </select>
+        </div>
+        <div class="field"><label>&nbsp;</label>
+          <button class="act" id="g-go" type="button">Tampilkan</button></div>
+      </div>
+    </div>
+    <div class="gallery" id="gallery"></div>
+  </section>
+
+  <!-- ------------------------------------------------------ files -->
+  <section id="view-files" hidden>
+    <div class="card">
+      <h2>File lokal</h2>
+      <p class="hint">CSV tidy hasil <code>bps_data.py</code> / <code>bps_chart.py</code> di folder ini
+        (tambah folder lain dengan <code>--data-dir</code>). Berguna saat offline.</p>
+      <div class="list" id="files"></div>
+    </div>
+    <div class="card" id="card-fchart" hidden>
+      <div class="chart-head">
+        <div style="flex:1 1 320px">
+          <p class="chart-title" id="fchart-title"></p>
+          <p class="chart-sub" id="fchart-sub"></p>
+        </div>
+        <div>
+          <button class="gho" id="fbtn-table" type="button">Tabel</button>
+          <button class="gho" id="fbtn-svg" type="button">SVG</button>
+        </div>
+      </div>
+      <div class="chips" id="fchart-chips"></div>
+      <div class="filters" id="fcontrols" style="margin-top:12px"></div>
+      <div id="fchart"></div>
+      <div class="table-view" id="ftable" hidden></div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------ settings -->
+  <section id="view-settings" hidden>
+    <div class="card">
+      <h2>Pengaturan</h2>
+      <p class="hint">Kunci API tersimpan di <code>.bps_key</code> pada folder aplikasi dan tidak
+        pernah dikirim ke halaman GitHub Pages.</p>
+      <div class="filters">
+        <div class="field">
+          <label for="s-domain">Domain (wilayah)</label>
+          <select id="s-domain"><option value="0000">0000 — Nasional</option></select>
+        </div>
+        <div class="field">
+          <label for="s-lang">Bahasa</label>
+          <select id="s-lang"><option value="ind">Indonesia</option><option value="eng">English</option></select>
+        </div>
+        <div class="field">
+          <label for="s-key">Kunci API BPS</label>
+          <input id="s-key" type="password" placeholder="tempel kunci baru (opsional)">
+        </div>
+        <div class="field"><label>&nbsp;</label>
+          <button class="act" id="s-save" type="button">Simpan</button></div>
+        <div class="field"><label>&nbsp;</label>
+          <button class="gho" id="s-clear" type="button">Kosongkan cache</button></div>
+      </div>
+      <p class="chart-sub" id="s-status"></p>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------ about -->
+  <section id="view-about" hidden>
+    <div class="card">
+      <h2>Tentang</h2>
+      <p class="hint">Sumber data sama dengan
+        <a href="https://github.com/hengkykurniawan/bps_download" target="_blank" rel="noopener">bps_download</a>:
+        <code>webapi.bps.go.id</code> (Tabel Dinamis). Bedanya, keluarannya grafik, bukan tabel.</p>
+      <h2 style="margin-top:14px">Bagaimana jenis grafik dipilih?</h2>
+      <div class="table-view" style="max-height:none">
+        <table>
+          <thead><tr><th>Struktur variabel</th><th style="text-align:left">Grafik</th></tr></thead>
+          <tbody>
+            <tr><td>1 seri, ≥3 periode</td><td style="text-align:left">Garis</td></tr>
+            <tr><td>1 seri, ≤2 periode</td><td style="text-align:left">Batang</td></tr>
+            <tr><td>2–8 komponen dari satu total, sepanjang waktu</td><td style="text-align:left">Area bertumpuk (100% bila berupa persen)</td></tr>
+            <tr><td>2–8 seri sepanjang waktu</td><td style="text-align:left">Garis ganda</td></tr>
+            <tr><td>9–16 seri sepanjang waktu</td><td style="text-align:left">Panel kecil</td></tr>
+            <tr><td>&gt;16 seri sepanjang waktu</td><td style="text-align:left">Heatmap</td></tr>
+            <tr><td>1 seri, nilai +/− (mis. laju pertumbuhan)</td><td style="text-align:left">Batang divergen</td></tr>
+            <tr><td>1 seri, &gt;8 kategori (mis. 34 provinsi)</td><td style="text-align:left">Batang horizontal berperingkat</td></tr>
+            <tr><td>2–8 komponen dari satu total</td><td style="text-align:left">Batang bertumpuk</td></tr>
+            <tr><td>&gt;8 seri × kategori</td><td style="text-align:left">Heatmap</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="viz-note">Warna kategori memakai 8 slot tetap yang sudah diuji aman untuk buta warna;
+        lebih dari 8 seri tidak menambah warna baru — bentuk grafiknya yang berubah
+        (panel kecil atau heatmap). Setiap grafik punya kembaran tabel lewat tombol “Tabel”.</p>
+    </div>
+  </section>
+</main>
+
+<script src="charts.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
