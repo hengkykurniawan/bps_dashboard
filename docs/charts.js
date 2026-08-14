@@ -283,6 +283,64 @@
     });
   }
 
+  /* Put a value on a column, choosing the placement that actually fits:
+       - flat above the cap when the bar's share of the band is wide enough;
+       - turned 90 degrees and reading upward when the bar is too narrow for
+         flat text (grouped columns are often only ~14px wide) and there is
+         clear space beyond the cap;
+       - inside the segment for a stack, where there is no free end, but only
+         when the segment can hold the text with padding.
+     Anything that still does not fit is left to the tooltip and table rather
+     than drawn over its neighbour. */
+  function barValue(ctx, g, o) {
+    var t = ctx.t;
+    var lw = textWidth(o.label, 10);
+    var cx = o.x + o.w / 2;
+
+    if (o.stacked) {
+      // a stacked segment has no free end, so the text goes inside it -- flat
+      // if the bar is wide enough, otherwise turned to use the segment's height
+      var ink = luminance(o.fill || "#888888") > 0.45 ? "#0b0b0b" : "#ffffff";
+      var mid = o.y + o.h / 2;
+      if (o.h >= 15 && lw <= o.w - 6) {
+        el("text", {
+          x: cx, y: mid + 3.5, "text-anchor": "middle", fill: ink,
+          "font-size": 10, "font-family": FONT,
+          "font-variant-numeric": "tabular-nums"
+        }, g).textContent = o.label;
+      } else if (o.w >= 11 && o.h >= lw + 8) {
+        el("text", {
+          x: cx, y: mid, "text-anchor": "middle", fill: ink,
+          "font-size": 10, "font-family": FONT,
+          "font-variant-numeric": "tabular-nums",
+          transform: "rotate(-90," + cx + "," + mid + ")"
+        }, g).textContent = o.label;
+      }
+      return;
+    }
+    if (o.w < 8) return;
+
+    if (lw <= o.room) {                                   // flat above the cap
+      el("text", {
+        x: cx, y: o.up ? o.y - 6 : o.y + o.h + 13, "text-anchor": "middle",
+        fill: t.ink2, "font-size": 10, "font-family": FONT,
+        "font-variant-numeric": "tabular-nums"
+      }, g).textContent = o.label;
+      return;
+    }
+
+    var cap = o.up ? o.y : o.y + o.h;                     // the free end
+    var room = o.up ? cap - o.plotTop : o.plotBottom - cap;
+    if (room < lw + 8) return;
+    var ty = o.up ? cap - 6 : cap + 6;
+    var n = el("text", {
+      x: cx, y: ty, "text-anchor": "start", fill: t.ink2, "font-size": 10,
+      "font-family": FONT, "font-variant-numeric": "tabular-nums",
+      transform: "rotate(" + (o.up ? -90 : 90) + "," + cx + "," + ty + ")"
+    }, g);
+    n.textContent = o.label;
+  }
+
   // ---------------------------------------------------------------- cartesian
 
   function cartesian(ctx) {
@@ -332,7 +390,8 @@
     var endLabels = null, gutter = 16;
     if ((isLine || isArea) && !stacked && series.length <= 4) {
       endLabels = series.map(function (s) {
-        if (series.length > 1) return s.label;
+        if (series.length > 1) return s.label;      // identity, not a value
+        if (!ctx.showValues) return "";             // a number: the toggle governs it
         for (var k = s.values.length - 1; k >= 0; k--) {
           if (s.values[k] !== null && s.values[k] !== undefined) return fmt(s.values[k]);
         }
@@ -446,9 +505,12 @@
       var groups = stacked || series.length === 1 ? 1 : series.length;
       var slot = Math.max(1, Math.min(MAX_BAR, (bandW - 10 - GAP * (groups - 1)) / groups));
       var groupW = slot * groups + GAP * (groups - 1);
+      // one running total per category, shared across the series -- declaring
+      // it inside the loop restarts every series at the baseline, which draws
+      // the segments on top of each other instead of stacking them
+      var acc = cats.map(function () { return 0; });
       series.forEach(function (s, si) {
         var col = isDiv ? null : colors[ctx.index(s)];
-        var acc = cats.map(function () { return 0; });
         for (i = 0; i < cats.length; i++) {
           var v = s.values[i];
           if (v === null || v === undefined) continue;
@@ -478,19 +540,13 @@
             d: barPath(x0, y0, slot, h, 4, dir),
             fill: isDiv ? (v >= 0 ? t.pos : t.neg) : col
           }, marks);
-          /* Value on the cap. A label is centred on its bar, so the room it
-             may occupy is the distance to the next label: the band width for a
-             lone series, one bar pitch when grouped. */
-          if (!stacked && ctx.showValues && slot >= 12) {
-            var label = fmtShort(v);
-            var room = series.length > 1 ? slot + GAP - 2 : bandW - 4;
-            if (textWidth(label, 10) <= room) {
-              el("text", {
-                x: x0 + slot / 2, y: shown >= 0 ? y0 - 6 : y0 + h + 13,
-                "text-anchor": "middle", fill: t.ink2, "font-size": 10,
-                "font-family": FONT, "font-variant-numeric": "tabular-nums"
-              }, marks).textContent = label;
-            }
+          if (ctx.showValues) {
+            barValue(ctx, marks, {
+              label: fmtShort(v), x: x0, w: slot, y: y0, h: h,
+              up: shown >= 0, stacked: stacked, fill: col,
+              room: series.length > 1 ? slot + GAP - 2 : bandW - 4,
+              plotTop: plot.top, plotBottom: plot.top + plot.h
+            });
           }
         }
       });
@@ -675,11 +731,24 @@
       }
       cats.forEach(function (c, i) {
         var v = s.values[i];
+        var fill = color(v);
         el("rect", {
           x: plot.left + cw * i + 1, y: y + 1,
           width: Math.max(1, cw - GAP), height: Math.max(1, ch - GAP),
-          rx: 2, fill: color(v)
+          rx: 2, fill: fill
         }, g);
+        // values in the cells when the cells are big enough to hold them
+        if (ctx.showValues && v !== null && v !== undefined && ch >= 15) {
+          var lbl = fmtShort(v);
+          if (textWidth(lbl, 10) <= cw - 8) {
+            el("text", {
+              x: plot.left + cw * (i + 0.5), y: y + ch / 2 + 3.5,
+              "text-anchor": "middle", "font-size": 10, "font-family": FONT,
+              "font-variant-numeric": "tabular-nums",
+              fill: fill === "transparent" || luminance(fill) > 0.5 ? t.ink : "#ffffff"
+            }, g).textContent = lbl;
+          }
+        }
       });
     });
     var step = labelStep(cats.length, plot.w, rotate ? 15 : 46);
@@ -749,7 +818,7 @@
       var col = colors[i % colors.length];
       var p = el("path", { d: d, fill: col, stroke: t.surface, "stroke-width": GAP }, g);
       var mid = (a + a2) / 2, pctv = v / total * 100;
-      if (pctv >= 6) {
+      if (ctx.showValues && pctv >= 6) {
         var lr = (R + r0) / 2;
         el("text", {
           x: cx + lr * Math.cos(mid), y: cy + lr * Math.sin(mid) + 4,

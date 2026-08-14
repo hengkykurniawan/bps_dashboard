@@ -205,13 +205,15 @@
     var b = $("banner");
     b.textContent = "";
     b.hidden = !msg;
-    if (!msg) return;
-    htm("span", null, b, msg);
-    if (action) {
-      var link = htm("button", "linkish", b, action.label);
-      link.type = "button";
-      link.addEventListener("click", action.fn);
+    if (msg) {
+      htm("span", null, b, msg);
+      if (action) {
+        var link = htm("button", "linkish", b, action.label);
+        link.type = "button";
+        link.addEventListener("click", action.fn);
+      }
     }
+    requestAnimationFrame(fitPickers);   // the banner changes the space above
   }
 
   function modeAvailable() {
@@ -268,6 +270,7 @@
         applyMode();
         showModeStatus();
         loadSubjects();
+        requestAnimationFrame(fitPickers);
       });
   }
 
@@ -309,9 +312,29 @@
   function redraw() {
     if (S.spec) drawInto($("chart"), S.spec, S.hidden, S.opts.show_values !== false);
   }
+
+  /* Size the two picker lists so the row ends inside the window. The space
+     above it is measured rather than assumed: the banner appears and
+     disappears with the data source, and the nav wraps on narrow windows. */
+  function fitPickers() {
+    var row = document.querySelector(".two-col");
+    var card = row && row.querySelector(".card");
+    var list = card && card.querySelector(".list");
+    if (!list) return;
+    var top = row.getBoundingClientRect().top + (window.scrollY || 0);
+    var chrome = card.getBoundingClientRect().height - list.getBoundingClientRect().height;
+    var room = window.innerHeight - top - chrome - 18;
+    document.documentElement.style.setProperty(
+      "--picker-list-max", Math.max(220, Math.round(room)) + "px");
+  }
+
   addEventListener("resize", (function () {
     var t;
-    return function () { clearTimeout(t); t = setTimeout(redraw, 200); };
+    return function () {
+      fitPickers();
+      clearTimeout(t);
+      t = setTimeout(redraw, 200);
+    };
   })());
 
   // ---------------------------------------------------------------- subjects

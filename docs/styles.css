@@ -216,7 +216,15 @@ main { padding: 6px 22px 70px; max-width: 1560px; margin: 0 auto; }
   margin-bottom: 0; min-width: 0;
   display: flex; flex-direction: column;
 }
-.two-col > .card .list { flex: 1 1 auto; }
+/* Height follows the window so the whole picker row fits one screen.
+   --picker-list-max is measured in app.js (fitPickers) because the space above
+   the row changes: the banner comes and goes with the data source, and the nav
+   wraps on narrow windows. The calc() is only the pre-measurement fallback. */
+.two-col > .card .list {
+  flex: 1 1 auto;
+  max-height: var(--picker-list-max, calc(100vh - 380px));
+  min-height: 220px;
+}
 @media (max-width: 1120px) { .two-col { grid-template-columns: 1fr; } }
 
 /* ---------------------------------------------------------------- cards */
