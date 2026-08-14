@@ -324,25 +324,61 @@
     });
   }
 
-  /* Fetch last_update for many variables, a few at a time. */
-  function checkUpdates(vars, opts, onProgress) {
+  /* The latest th_id per variable, cached: knowing which period to ask about
+     is half the cost of an update check, and the period list almost never
+     changes. */
+  var TH_STORE = "bps-th-cache";
+  var TH_TTL = 7 * 24 * 3600 * 1000;
+
+  function loadTh() {
+    try { return JSON.parse(localStorage.getItem(TH_STORE) || "{}"); }
+    catch (e) { return {}; }
+  }
+
+  function latestTh(varId, opts) {
+    var all = loadTh(), hit = all[varId];
+    if (hit && Date.now() - hit.at < TH_TTL) return Promise.resolve(hit.th);
+    return getYears(varId, opts).then(function (ys) {
+      if (!ys.length) return null;
+      var th = ys[ys.length - 1].th_id;
+      try {
+        all[varId] = { th: th, at: Date.now() };
+        localStorage.setItem(TH_STORE, JSON.stringify(all));
+      } catch (e) { }
+      return th;
+    });
+  }
+
+  /* last_update for one variable, remembered for next time. */
+  function updateFor(varId, opts) {
+    return latestTh(varId, opts).then(function (th) {
+      if (!th) return null;
+      return fetchLastUpdate(varId, th, opts);
+    }).then(function (when) {
+      if (when) rememberUpdate(varId, when);
+      return when || null;
+    });
+  }
+
+  /* Fetch last_update for many variables, a few at a time.
+     `onProgress(done, total, varId, when)` fires per variable so a table can
+     fill in as answers arrive instead of waiting for the whole sweep, and
+     `shouldStop()` lets the caller abandon it. */
+  function checkUpdates(vars, opts, onProgress, shouldStop) {
     var queue = vars.slice(), done = 0, results = {};
     function worker() {
+      if (shouldStop && shouldStop()) return Promise.resolve();
       var v = queue.shift();
       if (!v) return Promise.resolve();
-      return getYears(v.var_id, opts).then(function (ys) {
-        if (!ys.length) return null;
-        return fetchLastUpdate(v.var_id, ys[ys.length - 1].th_id, opts);
-      }).then(function (when) {
-        if (when) {
-          results[v.var_id] = when;
-          rememberUpdate(v.var_id, when);
-        }
-      }).catch(function () { }).then(function () {
+      var id = v.var_id;
+      return updateFor(id, opts).then(function (when) {
+        if (when) results[id] = when;
         done++;
-        if (onProgress) onProgress(done, vars.length);
-        return worker();
-      });
+        if (onProgress) onProgress(done, vars.length, id, when);
+      }, function () {
+        done++;
+        if (onProgress) onProgress(done, vars.length, id, null);
+      }).then(worker);
     }
     var pool = [];
     for (var i = 0; i < Math.min(4, vars.length); i++) pool.push(worker());
@@ -353,7 +389,8 @@
     getKey: getKey, setKey: setKey, maskKey: maskKey,
     getSubjects: getSubjects, getVars: getVars, getYears: getYears,
     getDomains: getDomains, getCube: getCube, getCubeLatest: getCubeLatest,
-    checkUpdates: checkUpdates, getUpdate: getUpdate, rememberUpdate: rememberUpdate,
+    checkUpdates: checkUpdates, updateFor: updateFor,
+    getUpdate: getUpdate, rememberUpdate: rememberUpdate,
     clean: clean
   };
 })(window);

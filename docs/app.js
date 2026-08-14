@@ -472,29 +472,95 @@
     var tr = htm("tr", null, htm("thead", null, table));
     VAR_COLS.forEach(function (c) { sortHeader(tr, c); });
     var tb = htm("tbody", null, table);
+    var pending = [];
     rows.forEach(function (v) {
       var r = htm("tr", "clk" + (S.varId == v.var_id ? " on" : ""), tb);
       htm("td", null, r, v.title);
       htm("td", "muted", r, v.unit || "—");
-      var td = htm("td", null, r);
+      var td = htm("td", "upd", r);
       var when = v.last_update || knownUpdate(v.var_id);
-      if (!updateBadge(td, when)) htm("span", "muted", td, "—");
+      if (!updateBadge(td, when)) {
+        var dash = htm("span", "muted", td, "—");
+        dash.title = "Tanggal pembaruan diambil saat baris ini terlihat";
+        pending.push({ v: v, cell: td, row: r });
+      }
       htm("td", "num muted", r, v.var_id);
       r.addEventListener("click", function () { pickVar(v); });
     });
     if (!rows.length) htm("p", "muted", box, "Tidak ada variabel yang cocok.");
+    fillUpdatesLazily(pending);
   }
+
+  /* BPS only reports last_update inside a variable's data response, so a date
+     costs a request per variable — far too much to fetch for a 221-row subject
+     up front. Rows therefore fetch their own date once they scroll into view,
+     a few at a time, the way the gallery loads its charts. */
+  var updGen = 0;
+
+  function fillUpdatesLazily(pending) {
+    updGen++;
+    if (MODE !== "direct" || !pending.length || !BPSApi.getKey()) return;
+    var gen = updGen, running = 0, queue = [];
+
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (!en.isIntersecting) return;
+        io.unobserve(en.target);
+        var item = pending.filter(function (p) { return p.row === en.target; })[0];
+        if (item && !item.queued) { item.queued = true; queue.push(item); pump(); }
+      });
+    }, { root: $("vars"), rootMargin: "200px" });
+    pending.forEach(function (p) { io.observe(p.row); });
+    // The observer stays silent while the tab is in the background, so the
+    // first screenful is requested outright; the rest still wait for scroll.
+    pending.slice(0, 15).forEach(function (p) {
+      if (!p.queued) { p.queued = true; io.unobserve(p.row); queue.push(p); }
+    });
+    pump();
+
+    // `start` gives each request its own scope: with a `var` inside the loop
+    // every in-flight callback would close over the same item and write its
+    // answer into the last row.
+    function start(item) {
+      running++;
+      BPSApi.updateFor(item.v.var_id, SET).then(function (when) {
+        running--;
+        if (gen === updGen && when && item.cell.isConnected) {
+          item.cell.textContent = "";
+          updateBadge(item.cell, when);
+        }
+        pump();
+      }, function () { running--; pump(); });
+    }
+
+    function pump() {
+      while (running < 3 && queue.length) start(queue.shift());
+    }
+  }
+
+  var checking = false;
 
   $("btn-check").addEventListener("click", function () {
     var btn = $("btn-check");
-    btn.disabled = true;
-    var original = btn.textContent;
-    BPSApi.checkUpdates(VARS, SET, function (done, total) {
-      btn.textContent = "memeriksa " + done + "/" + total + "…";
-    }).then(function () {
-      btn.disabled = false;
+    if (checking) { checking = false; return; }          // second click stops it
+    checking = true;
+    var original = "↻ Cek pembaruan";
+    var cells = {};
+    document.querySelectorAll("#vars tbody tr").forEach(function (r, i) {
+      var id = r.lastElementChild.textContent;
+      cells[id] = r.querySelector("td.upd");
+    });
+    BPSApi.checkUpdates(VARS, SET, function (done, total, varId, when) {
+      btn.textContent = "berhenti (" + done + "/" + total + ")";
+      var cell = cells[varId];                            // fill rows as they land
+      if (when && cell && cell.isConnected) {
+        cell.textContent = "";
+        updateBadge(cell, when);
+      }
+    }, function () { return !checking; }).then(function () {
+      checking = false;
       btn.textContent = original;
-      renderVars();
+      if (varSort.key === "updated") renderVars();        // re-sort once, at the end
     });
   });
 
