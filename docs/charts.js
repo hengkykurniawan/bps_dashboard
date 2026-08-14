@@ -90,6 +90,19 @@
     return (_mcache[key] = _mctx.measureText(String(s)).width);
   }
 
+  /* Width to reserve for a column of axis labels, and the budget the text is
+     then trimmed to. The two must be derived from the same numbers: reserving
+     the widest label but trimming to something narrower silently ellipsizes
+     labels that would have fitted. `gap` is the space between the label and
+     the plot, `inset` keeps the text off the frame edge. */
+  function labelGutter(labels, size, gap, inset, cap) {
+    var max = 0;
+    labels.forEach(function (s) { max = Math.max(max, textWidth(s, size)); });
+    return { width: Math.min(max + gap + inset, cap), gap: gap, inset: inset };
+  }
+
+  function gutterBudget(g) { return g.width - g.gap - g.inset; }
+
   /* Trim to fit, with an ellipsis -- never clip, never overflow. */
   function ellipsize(s, size, maxW) {
     s = String(s);
@@ -535,9 +548,9 @@
     var lo = Math.min(0, Math.min.apply(null, vals));
     var hi = Math.max(0, Math.max.apply(null, vals));
 
-    var labelW = 0;
-    cats.forEach(function (c) { labelW = Math.max(labelW, textWidth(c.label, 11)); });
-    labelW = Math.min(labelW + 12, Math.max(90, ctx.width * 0.34));
+    var gut = labelGutter(cats.map(function (c) { return c.label; }), 11, 10, 2,
+      Math.max(90, ctx.width * 0.34));
+    var labelW = gut.width;
     var plot = { left: labelW, top: 6, w: ctx.width - labelW - 46, h: ctx.height - 34 };
     // tick count follows the room available, not a fixed number
     var nt = niceTicks(lo, hi, Math.max(2, Math.min(5, Math.floor(plot.w / 80))));
@@ -558,10 +571,10 @@
     cats.forEach(function (c, i) {
       var cy = plot.top + bandH * (i + 0.5);
       var n = el("text", {
-        x: plot.left - 10, y: cy + 4, "text-anchor": "end", fill: t.ink2,
+        x: plot.left - gut.gap, y: cy + 4, "text-anchor": "end", fill: t.ink2,
         "font-size": 11, "font-family": FONT
       }, g);
-      n.textContent = ellipsize(c.label, 11, labelW - 14);
+      n.textContent = ellipsize(c.label, 11, gutterBudget(gut));
       if (n.textContent !== c.label) el("title", {}, n).textContent = c.full || c.label;
 
       series.forEach(function (s, si) {
@@ -614,9 +627,9 @@
     var diverging = lo < 0 && hi > 0;
     var mag = Math.max(Math.abs(lo), Math.abs(hi)) || 1;
 
-    var labelW = 0;
-    series.forEach(function (s) { labelW = Math.max(labelW, textWidth(s.label, 11)); });
-    labelW = Math.min(labelW + 12, Math.max(90, ctx.width * 0.3));
+    var gut = labelGutter(series.map(function (s) { return s.label; }), 11, 8, 2,
+      Math.max(90, ctx.width * 0.3));
+    var labelW = gut.width;
     var botLabel = 0;
     cats.forEach(function (c) { botLabel = Math.max(botLabel, textWidth(c.label, 10)); });
     var rotate = cats.length * (botLabel + 8) > ctx.width - labelW;
@@ -641,10 +654,10 @@
       var y = plot.top + ch * r;
       if (r % rowStep === 0) {
         var n = el("text", {
-          x: plot.left - 8, y: y + ch / 2 + 4, "text-anchor": "end", fill: t.ink2,
+          x: plot.left - gut.gap, y: y + ch / 2 + 4, "text-anchor": "end", fill: t.ink2,
           "font-size": 11, "font-family": FONT
         }, g);
-        n.textContent = ellipsize(s.label, 11, labelW - 12);
+        n.textContent = ellipsize(s.label, 11, gutterBudget(gut));
         if (n.textContent !== s.label) el("title", {}, n).textContent = s.label;
       }
       cats.forEach(function (c, i) {
