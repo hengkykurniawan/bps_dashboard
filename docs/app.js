@@ -275,11 +275,21 @@
     switchMode($("mode").value);
   });
 
+  /* The variable panel is always on screen now that it shares a row with the
+     subjects, so it is reset rather than hidden. */
+  function resetVarsPanel() {
+    VARS = [];
+    $("vars-hint").textContent = "Pilih subjek di sebelah kiri.";
+    $("vars").textContent = "";
+    htm("p", "muted", $("vars"), "Belum ada subjek yang dipilih.");
+    $("btn-check").hidden = true;
+  }
+
   function switchMode(m) {
     MODE = m;
     CUBES = {};
     S = freshState();
-    $("card-vars").hidden = true;
+    resetVarsPanel();
     $("card-chart").hidden = true;
     applyMode();
     showModeStatus();
@@ -379,7 +389,6 @@
   function pickSubject(s, emptyInSnapshot) {
     S.subject = s.id; S.subjectTitle = s.title;
     renderSubjects();
-    $("card-vars").hidden = false;
     $("vars-hint").textContent = "Variabel dinamis di subjek " + s.id + " — " + s.title + ".";
     $("vars").textContent = "";
     if (emptyInSnapshot) {

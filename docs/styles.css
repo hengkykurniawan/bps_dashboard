@@ -186,7 +186,7 @@ header .spacer { flex: 1; }
 nav {
   display: flex; gap: 6px; flex-wrap: wrap;
   padding: 4px 22px 14px;
-  max-width: 1180px; margin: 0 auto;
+  max-width: 1560px; margin: 0 auto;
   position: sticky; top: 0; z-index: 6;
   background: linear-gradient(var(--page) 62%, transparent);
 }
@@ -201,7 +201,23 @@ nav button.on {
   box-shadow: var(--shadow); border-color: var(--border);
 }
 
-main { padding: 6px 22px 70px; max-width: 1180px; margin: 0 auto; }
+main { padding: 6px 22px 70px; max-width: 1560px; margin: 0 auto; }
+
+/* Subject and variable pickers sit side by side: the subject names are short,
+   the variable titles are long, so the split is uneven on purpose. Below
+   ~1120px there is no room for two readable columns and they stack. */
+.two-col {
+  display: grid; gap: 18px; align-items: stretch; margin-bottom: 18px;
+  grid-template-columns: minmax(330px, 0.78fr) minmax(520px, 1.22fr);
+}
+/* both cards take the height of the taller one, and each list fills its card,
+   so the pair reads as one row rather than two ragged boxes */
+.two-col > .card {
+  margin-bottom: 0; min-width: 0;
+  display: flex; flex-direction: column;
+}
+.two-col > .card .list { flex: 1 1 auto; }
+@media (max-width: 1120px) { .two-col { grid-template-columns: 1fr; } }
 
 /* ---------------------------------------------------------------- cards */
 

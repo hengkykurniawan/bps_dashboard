@@ -33,41 +33,39 @@
 
   <!-- ------------------------------------------------------ explore -->
   <section id="view-explore">
-    <div class="card">
-      <div class="chart-head">
-        <div style="flex:1 1 260px">
-          <h2>1 · Subjek</h2>
-          <p class="hint">Seluruh subjek statistik BPS, dikelompokkan seperti di situs BPS.</p>
-        </div>
+    <div class="two-col">
+      <div class="card">
+        <h2>1 · Subjek</h2>
+        <p class="hint">Seluruh subjek statistik BPS, dikelompokkan seperti di situs BPS.</p>
         <div class="filters">
           <div class="field">
             <label for="q-subject">Cari subjek</label>
-            <input id="q-subject" type="search" placeholder="mis. neraca, harga, tenaga kerja">
+            <input id="q-subject" type="search" placeholder="mis. neraca, harga">
           </div>
           <div class="field">
             <label>&nbsp;</label>
             <span class="chip" id="subject-count">—</span>
           </div>
         </div>
+        <div class="list" id="subjects"><p class="muted">memuat…</p></div>
       </div>
-      <div id="subjects"><p class="muted">memuat…</p></div>
-    </div>
 
-    <div class="card" id="card-vars" hidden>
-      <h2>2 · Variabel</h2>
-      <p class="hint" id="vars-hint"></p>
-      <div class="filters">
-        <div class="field">
-          <label for="q-var">Cari variabel</label>
-          <input id="q-var" type="search" placeholder="cari judul variabel">
+      <div class="card" id="card-vars">
+        <h2>2 · Variabel</h2>
+        <p class="hint" id="vars-hint">Pilih subjek di sebelah kiri.</p>
+        <div class="filters">
+          <div class="field">
+            <label for="q-var">Cari variabel</label>
+            <input id="q-var" type="search" placeholder="cari judul variabel">
+          </div>
+          <div class="field">
+            <label>&nbsp;</label>
+            <button class="gho" id="btn-check" type="button" hidden
+                    title="Ambil tanggal pembaruan terakhir tiap variabel dari BPS">↻ Cek pembaruan</button>
+          </div>
         </div>
-        <div class="field">
-          <label>&nbsp;</label>
-          <button class="gho" id="btn-check" type="button" hidden
-                  title="Ambil tanggal pembaruan terakhir tiap variabel dari BPS">↻ Cek pembaruan</button>
-        </div>
+        <div class="list" id="vars"><p class="muted">Belum ada subjek yang dipilih.</p></div>
       </div>
-      <div class="list" id="vars"></div>
     </div>
 
     <div class="card" id="card-chart" hidden>
