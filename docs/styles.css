@@ -318,7 +318,7 @@ button.linkish {
 
 /* ---------------------------------------------------------------- lists */
 
-.list { max-height: 380px; overflow: auto; margin-top: 12px; border-radius: 12px; }
+.list { max-height: 760px; overflow: auto; margin-top: 12px; border-radius: 12px; }
 .list table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .list th, .list td {
   text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border);
@@ -330,6 +330,22 @@ button.linkish {
   letter-spacing: .05em; z-index: 1;
 }
 .list tr:last-child td { border-bottom: none; }
+
+/* sortable column headers: the whole cell is one button, so keyboard focus
+   and Enter/Space come for free */
+.list th.sortable { padding: 0; }
+.list th .th-sort {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  background: none; border: none; cursor: pointer;
+  color: inherit; font: inherit; letter-spacing: inherit;
+  text-transform: inherit; padding: 8px 10px; border-radius: 8px;
+}
+.list th.num .th-sort { justify-content: flex-end; }
+.list th .th-sort:hover { background: var(--hover); color: var(--text-primary); }
+.list th .th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.list th .sort-ic { font-size: 10px; opacity: .38; line-height: 1; }
+.list th.on .th-sort { color: var(--accent-ink); }
+.list th.on .sort-ic { opacity: 1; }
 .list tr.clk:hover { background: var(--hover); cursor: pointer; }
 .list tr.on td { background: var(--accent-soft); }
 .list tr.on td:first-child { box-shadow: inset 3px 0 0 var(--accent); }

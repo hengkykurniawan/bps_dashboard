@@ -441,11 +441,61 @@
 
   $("q-var").addEventListener("input", renderVars);
 
+  // Sortable columns. `key` null = BPS's own ordering, which is meaningful, so
+  // a third click on a header returns to it rather than only toggling.
+  var VAR_COLS = [
+    { key: "title", label: "Variabel" },
+    { key: "unit", label: "Satuan" },
+    { key: "updated", label: "Diperbarui" },
+    { key: "var_id", label: "ID", cls: "num" }
+  ];
+  var varSort = { key: null, dir: 1 };
+
+  function sortValue(v, key) {
+    if (key === "title") return (v.title || "").toLowerCase();
+    if (key === "unit") return (v.unit || "").toLowerCase();
+    if (key === "updated") return v.last_update || knownUpdate(v.var_id) || "";
+    if (key === "var_id") return parseInt(v.var_id, 10) || 0;
+    return "";
+  }
+
+  function sortVars(rows) {
+    if (!varSort.key) return rows;
+    var key = varSort.key, dir = varSort.dir;
+    return rows.slice().sort(function (a, b) {
+      var x = sortValue(a, key), y = sortValue(b, key);
+      // rows with no value ("—") sink to the bottom either way round
+      var xe = x === "" , ye = y === "";
+      if (xe !== ye) return xe ? 1 : -1;
+      var c = typeof x === "number" && typeof y === "number"
+        ? x - y : String(x).localeCompare(String(y), "id");
+      return dir * c;
+    });
+  }
+
+  function sortHeader(tr, col) {
+    var active = varSort.key === col.key;
+    var th = htm("th", "sortable" + (col.cls ? " " + col.cls : "") + (active ? " on" : ""), tr);
+    th.setAttribute("aria-sort", active ? (varSort.dir > 0 ? "ascending" : "descending") : "none");
+    var b = htm("button", "th-sort", th);
+    b.type = "button";
+    b.title = "Urutkan menurut " + col.label;
+    htm("span", null, b, col.label);
+    htm("span", "sort-ic", b, active ? (varSort.dir > 0 ? "↑" : "↓") : "↕");
+    b.addEventListener("click", function () {
+      if (varSort.key !== col.key) { varSort.key = col.key; varSort.dir = 1; }
+      else if (varSort.dir > 0) { varSort.dir = -1; }
+      else { varSort.key = null; varSort.dir = 1; }
+      renderVars();
+    });
+  }
+
   function renderVars() {
     var q = $("q-var").value.toLowerCase();
     var rows = VARS.filter(function (v) {
       return !q || (v.title + " " + v.var_id).toLowerCase().indexOf(q) >= 0;
     });
+    rows = sortVars(rows);
     var box = $("vars");
     box.textContent = "";
     $("btn-check").hidden = MODE !== "direct" || !VARS.length;
@@ -455,10 +505,7 @@
     }
     var table = htm("table", null, box);
     var tr = htm("tr", null, htm("thead", null, table));
-    htm("th", null, tr, "Variabel");
-    htm("th", null, tr, "Satuan");
-    htm("th", null, tr, "Diperbarui");
-    htm("th", "num", tr, "ID");
+    VAR_COLS.forEach(function (c) { sortHeader(tr, c); });
     var tb = htm("tbody", null, table);
     rows.forEach(function (v) {
       var r = htm("tr", "clk" + (S.varId == v.var_id ? " on" : ""), tb);
