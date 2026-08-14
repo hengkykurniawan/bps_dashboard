@@ -479,7 +479,8 @@
             fill: isDiv ? (v >= 0 ? t.pos : t.neg) : col
           }, marks);
           // value on the cap when there is room and few enough bars
-          if (!stacked && series.length === 1 && cats.length <= 14 && slot >= 18) {
+          if (!stacked && ctx.showValues && series.length === 1 &&
+              cats.length <= 14 && slot >= 18) {
             var label = fmtShort(v);
             if (textWidth(label, 10) <= slot + bandW * 0.4) {
               el("text", {
@@ -537,7 +538,11 @@
   function horizontal(ctx) {
     var spec = ctx.spec, t = ctx.t, svg = ctx.svg, colors = ctx.colors;
     var cats = spec.x.categories, series = ctx.visible;
-    var grouped = spec.chart === "hbar_grouped";
+    // More than one series always splits the band. Drawing them at the same y
+    // would pile the bars (and their value labels) on top of each other and
+    // show only the last one -- which is what a manually forced "hbar" on a
+    // multi-series variable used to do.
+    var grouped = spec.chart === "hbar_grouped" || series.length > 1;
     var isDiv = spec.chart === "diverging_bar";
 
     var vals = [];
@@ -587,9 +592,10 @@
           d: barPath(v >= 0 ? zero : zero, y0, slot, len, 4, dir),
           fill: isDiv ? (v >= 0 ? t.pos : t.neg) : colors[ctx.index(s)]
         }, marks);
-        if (!grouped) {
-          // The tip value only gets drawn where it fits between the bar end
-          // and the frame -- and never back over the category gutter.
+        // Tip values only on a single series, only when the rows are tall
+        // enough for the text, and only where they fit between the bar end and
+        // the frame -- never back over the category gutter.
+        if (!grouped && ctx.showValues && bandH >= 16) {
           var label = fmtShort(v);
           var lx = v >= 0 ? zero + len + 6 : zero - len - 6;
           var lw = textWidth(label, 10);
@@ -872,7 +878,9 @@
 
   function autoHeight(spec, width) {
     if (isHorizontal(spec)) {
-      var per = spec.chart === "hbar_grouped" ? 16 * Math.max(1, spec.series.length) + 14 : 30;
+      // any multi-series horizontal bar is drawn grouped, so the band has to
+      // be tall enough for one bar per series
+      var per = spec.series.length > 1 ? 16 * spec.series.length + 14 : 30;
       return Math.max(220, spec.x.categories.length * per + 40);
     }
     if (spec.chart === "heatmap") {
@@ -924,6 +932,7 @@
     var ctx = {
       spec: spec, svg: svg, t: t, colors: colors, width: width, height: height,
       container: plotBox, visible: visible, placed: [],
+      showValues: opts.showValues !== false,
       index: function (s) { return spec.series.indexOf(s); },
       tip: Tip(plotBox)
     };

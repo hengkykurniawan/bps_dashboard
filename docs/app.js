@@ -297,7 +297,7 @@
   var S = freshState();
 
   function redraw() {
-    if (S.spec) drawInto($("chart"), S.spec, S.hidden);
+    if (S.spec) drawInto($("chart"), S.spec, S.hidden, S.opts.show_values !== false);
   }
   addEventListener("resize", (function () {
     var t;
@@ -612,12 +612,13 @@
     });
   }
 
-  function drawInto(box, spec, hidden) {
+  function drawInto(box, spec, hidden, showValues) {
     BPSChart.render(box, spec, {
       hidden: hidden,
+      showValues: showValues !== false,
       onToggle: function (id) {
         if (hidden.has(id)) hidden.delete(id); else hidden.add(id);
-        drawInto(box, spec, hidden);
+        drawInto(box, spec, hidden, showValues);
       }
     });
   }
@@ -643,7 +644,7 @@
     updateBadge(elChips, when, { long: true });
 
     buildControls(spec, st, elControls, onChange, withYears);
-    drawInto(elChart, spec, st.hidden);
+    drawInto(elChart, spec, st.hidden, st.opts.show_values !== false);
     buildTable(spec, elTable);
   }
 
@@ -719,6 +720,18 @@
       select(box, dim.label, opts, spec.roles.picks[d], function (v) {
         st.opts["pick_" + d] = v; onChange();
       });
+    });
+
+    var vf = field(box, "Label nilai");
+    var vlab = htm("label", "checkline", vf);
+    var vcb = htm("input", null, vlab);
+    vcb.type = "checkbox";
+    vcb.checked = st.opts.show_values !== false;
+    htm("span", null, vlab, "tampilkan angka");
+    // redraw only -- the spec is unchanged, so no refetch
+    vcb.addEventListener("change", function () {
+      st.opts.show_values = vcb.checked;
+      drawInto($("chart"), spec, st.hidden, vcb.checked);
     });
 
     if ((spec.totals_dropped && spec.totals_dropped.length) || spec.include_totals) {
