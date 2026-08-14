@@ -24,7 +24,6 @@
 <nav>
   <button data-view="explore" class="on">Jelajah</button>
   <button data-view="gallery">Galeri subjek</button>
-  <button data-view="files">File lokal</button>
   <button data-view="settings">Pengaturan</button>
   <button data-view="about">Tentang</button>
 </nav>
@@ -115,32 +114,6 @@
     <div class="gallery" id="gallery"></div>
   </section>
 
-  <!-- ------------------------------------------------------ files -->
-  <section id="view-files" hidden>
-    <div class="card">
-      <h2>File lokal</h2>
-      <p class="hint">CSV tidy hasil <code>bps_data.py</code> / <code>bps_chart.py</code> di folder aplikasi
-        (tambah folder lain dengan <code>--data-dir</code>). Hanya tersedia saat layanan lokal berjalan.</p>
-      <div class="list" id="files"></div>
-    </div>
-    <div class="card" id="card-fchart" hidden>
-      <div class="chart-head">
-        <div style="flex:1 1 320px">
-          <p class="chart-title" id="fchart-title"></p>
-          <p class="chart-sub" id="fchart-sub"></p>
-        </div>
-        <div>
-          <button class="gho" id="fbtn-table" type="button">Tabel</button>
-          <button class="gho" id="fbtn-svg" type="button">SVG</button>
-        </div>
-      </div>
-      <div class="chips" id="fchart-chips"></div>
-      <div class="filters" id="fcontrols" style="margin-top:14px"></div>
-      <div id="fchart"></div>
-      <div class="table-view" id="ftable" hidden></div>
-    </div>
-  </section>
-
   <!-- ------------------------------------------------------ settings -->
   <section id="view-settings" hidden>
     <div class="card">
@@ -162,9 +135,8 @@
       <p class="chart-sub" id="s-key-state"></p>
       <p class="viz-note">Kunci disimpan di <code>localStorage</code> browser ini saja dan hanya
         dikirim ke webapi.bps.go.id. Kunci tidak pernah masuk ke repositori dan tidak dibagikan
-        ke pengunjung lain. Di komputer bersama, sebaiknya pakai layanan lokal
-        (<code>python bps_dashboard.py</code>) agar kunci cukup tersimpan di berkas
-        <code>.bps_key</code>.</p>
+        ke pengunjung lain. Siapa pun yang memakai profil browser ini bisa membacanya kembali,
+        jadi di komputer bersama gunakan tombol <strong>Hapus kunci</strong> setelah selesai.</p>
     </div>
 
     <div class="card">
@@ -193,18 +165,16 @@
         <a href="https://github.com/hengkykurniawan/bps_download" target="_blank" rel="noopener">bps_download</a>:
         <code>webapi.bps.go.id</code> (Tabel Dinamis). Bedanya, keluarannya grafik, bukan tabel.</p>
 
-      <h2 style="margin-top:16px">Tiga sumber data</h2>
+      <h2 style="margin-top:16px">Dua sumber data</h2>
       <div class="table-view" style="max-height:none">
         <table>
           <thead><tr><th>Sumber</th><th style="text-align:left">Cakupan</th><th style="text-align:left">Syarat</th></tr></thead>
           <tbody>
-            <tr><td>● API BPS langsung</td>
-              <td style="text-align:left">Seluruh variabel &amp; periode, selalu terbaru</td>
+            <tr><td>● Full access</td>
+              <td style="text-align:left">Seluruh variabel &amp; periode BPS, diambil langsung dari
+                webapi.bps.go.id saat grafik dibuka — selalu terbaru</td>
               <td style="text-align:left">Kunci API Anda sendiri, disimpan di browser ini</td></tr>
-            <tr><td>● Layanan lokal</td>
-              <td style="text-align:left">Sama, plus file CSV di komputer Anda</td>
-              <td style="text-align:left"><code>python bps_dashboard.py</code>; kunci tetap di berkas</td></tr>
-            <tr><td>◐ Contoh grafik</td>
+            <tr><td>◐ Sampel grafik</td>
               <td style="text-align:left">Sekumpulan contoh dari tiap subjek — dipilih agar mewakili
                 semua bentuk grafik. Cukup untuk mencoba, bukan salinan lengkap BPS</td>
               <td style="text-align:left">Tidak perlu apa pun</td></tr>

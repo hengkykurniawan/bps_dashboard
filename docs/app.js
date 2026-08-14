@@ -1,29 +1,22 @@
 /* BPS Dashboard - UI.
  *
- * Three data sources, one code path. Whichever is active, the browser ends up
+ * Two data sources, one code path. Whichever is active, the browser ends up
  * with the same cube and docs/infer.js decides the chart, so they behave
  * identically:
  *
- *   direct - the browser calls webapi.bps.go.id itself with the visitor's own
- *            key (docs/bps-api.js). Every variable, every period, always
- *            current -- and it needs no server at all.
- *   live   - the local Python service holds the key on disk and makes the
- *            calls. Same coverage; preferred on a shared machine.
- *   static - JSON cubes committed under docs/data/, refreshed by a scheduled
- *            GitHub Action. No key needed; covers the snapshotted subjects.
+ *   direct ("Full access")   - the browser calls webapi.bps.go.id itself with
+ *            the visitor's key (docs/bps-api.js). Every variable, every
+ *            period, always current, and it needs no server at all.
+ *   static ("Sampel grafik") - JSON cubes committed under docs/data/. No key
+ *            needed; a curated sample of each subject.
  */
 (function () {
   "use strict";
 
-  var LOCAL = "http://127.0.0.1:8766";
-  var SELF_HOSTED = location.port === "8766";
-  var API = SELF_HOSTED ? "" : LOCAL;
   var DATA = "data/";
 
   var MODE = "static";
   var CATALOG = null;
-  var LIVE_OK = false;
-  var HEALTH = null;
   var SET = { domain: "0000", lang: "ind" };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -53,15 +46,6 @@
         return d;
       }, function () { throw new Error("HTTP " + r.status); });
     });
-  }
-
-  function api(path, params) { return getJSON(API + path + qs(params)); }
-
-  function post(path, body) {
-    return fetch(API + path, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body || {})
-    }).then(function (r) { return r.json(); });
   }
 
   function download(name, text, mime) {
@@ -150,18 +134,17 @@
     if (CUBES[key]) return Promise.resolve(CUBES[key]);
     var p;
     if (MODE === "static") p = getJSON(DATA + ref.data);
-    else if (MODE === "direct") {
+    else {
       p = ref.th === "latest" || !ref.th
         ? BPSApi.getCubeLatest(ref.var, SET)
         : BPSApi.getCube(ref.var, [ref.th], SET);
-    } else p = api("/api/cube", ref);
+    }
     return p.then(function (cube) { CUBES[key] = cube; return cube; });
   }
 
   function listSubjects() {
     if (MODE === "static") return Promise.resolve(CATALOG.subjects || []);
-    if (MODE === "direct") return BPSApi.getSubjects(SET);
-    return api("/api/subjects");
+    return BPSApi.getSubjects(SET);
   }
 
   /* The catalogue is split per subject: index.json stays small enough to load
@@ -180,14 +163,12 @@
         return list;
       });
     }
-    if (MODE === "direct") return BPSApi.getVars(subject, SET);
-    return api("/api/vars", { subject: subject });
+    return BPSApi.getVars(subject, SET);
   }
 
   function listYears(varId) {
     if (MODE === "static") return Promise.resolve([]);
-    if (MODE === "direct") return BPSApi.getYears(varId, SET);
-    return api("/api/years", { var: varId });
+    return BPSApi.getYears(varId, SET);
   }
 
   function cubeRefFor(v, th) {
@@ -200,11 +181,10 @@
     b.addEventListener("click", function () {
       document.querySelectorAll("nav button").forEach(function (x) { x.classList.remove("on"); });
       b.classList.add("on");
-      ["explore", "gallery", "files", "settings", "about"].forEach(function (v) {
+      ["explore", "gallery", "settings", "about"].forEach(function (v) {
         $("view-" + v).hidden = v !== b.dataset.view;
       });
       if (b.dataset.view === "gallery") initGallery();
-      if (b.dataset.view === "files") loadFiles();
       if (b.dataset.view === "settings") loadSettings();
     });
   });
@@ -236,15 +216,12 @@
 
   function modeAvailable() {
     var out = [];
-    if (LIVE_OK) out.push(["live", "● Layanan lokal"]);
-    if (BPSApi.getKey()) out.push(["direct", "● API BPS langsung"]);
-    if (CATALOG) out.push(["static", "◐ Contoh grafik"]);
+    if (BPSApi.getKey()) out.push(["direct", "● Full access"]);
+    if (CATALOG) out.push(["static", "◐ Sampel grafik"]);
     return out;
   }
 
   function applyMode() {
-    document.querySelector('nav button[data-view="files"]').hidden = MODE !== "live";
-    if (MODE !== "live") $("view-files").hidden = true;
     var sel = $("mode");
     var avail = modeAvailable();
     sel.textContent = "";
@@ -262,16 +239,11 @@
     var conn = $("conn");
     conn.className = "chip strong";
     if (MODE === "direct") {
-      conn.textContent = "API BPS langsung · selalu terbaru";
+      conn.textContent = "Full access · selalu terbaru";
       banner("");
-    } else if (MODE === "live") {
-      conn.textContent = HEALTH && HEALTH.key_set
-        ? "layanan lokal · selalu terbaru" : "layanan lokal · kunci API belum diisi";
-      banner(HEALTH && !HEALTH.key_set
-        ? "Belum ada kunci API BPS. Isi di tab Pengaturan, atau tulis ke file .bps_key." : "");
     } else if (CATALOG) {
-      conn.textContent = "contoh · " + (CATALOG.variable_count || 0) + " grafik";
-      banner("Ini contoh: " + (CATALOG.variable_count || 0) + " grafik pilihan" +
+      conn.textContent = "sampel · " + (CATALOG.variable_count || 0) + " grafik";
+      banner("Ini sampel: " + (CATALOG.variable_count || 0) + " grafik pilihan" +
         (CATALOG.sample_per_subject
           ? " (maksimal " + CATALOG.sample_per_subject + " per subjek)" : "") +
         ", periode terbaru saat cuplikan dibuat " +
@@ -289,19 +261,14 @@
   }
 
   function boot() {
-    var cat = getJSON(DATA + "index.json").then(function (c) { CATALOG = c; })
-      .catch(function () { CATALOG = null; });
-    var live = api("/api/health").then(function (d) {
-      LIVE_OK = true; return d;
-    }).catch(function () { LIVE_OK = false; return null; });
-
-    Promise.all([cat, live]).then(function (r) {
-      HEALTH = r[1];
-      MODE = LIVE_OK ? "live" : (BPSApi.getKey() ? "direct" : (CATALOG ? "static" : "direct"));
-      applyMode();
-      showModeStatus();
-      loadSubjects();
-    });
+    getJSON(DATA + "index.json")
+      .then(function (c) { CATALOG = c; }, function () { CATALOG = null; })
+      .then(function () {
+        MODE = BPSApi.getKey() ? "direct" : (CATALOG ? "static" : "direct");
+        applyMode();
+        showModeStatus();
+        loadSubjects();
+      });
   }
 
   $("mode").addEventListener("change", function () {
@@ -328,11 +295,9 @@
     };
   }
   var S = freshState();
-  var F = { file: null, opts: {}, hidden: new Set(), spec: null, cube: null };
 
   function redraw() {
     if (S.spec) drawInto($("chart"), S.spec, S.hidden);
-    if (F.spec) drawInto($("fchart"), F.spec, F.hidden);
   }
   addEventListener("resize", (function () {
     var t;
@@ -777,12 +742,9 @@
   }
 
   wireButtons("", function () { return S; }, $("chart"), $("table"));
-  wireButtons("f", function () { return F; }, $("fchart"), $("ftable"));
 
   $("btn-csv").addEventListener("click", function () {
-    if (MODE === "live" && S.varId) {
-      location.href = API + "/api/data.csv" + qs({ var: S.varId, th: S.th });
-    } else if (S.cube) {
+    if (S.cube) {
       download("data_var" + S.cube.var_id + ".csv", BPSInfer.toCSV(S.cube),
         "text/csv;charset=utf-8");
     }
@@ -870,57 +832,6 @@
     }
   }
 
-  // ---------------------------------------------------------------- files
-
-  function loadFiles() {
-    var box = $("files");
-    box.textContent = "";
-    htm("p", "muted", box, "memuat…");
-    api("/api/localfiles").then(function (rows) {
-      box.textContent = "";
-      if (!rows.length) {
-        htm("p", "muted", box, "Belum ada CSV tidy di folder aplikasi. " +
-          "Jalankan bps_chart.py get --var … atau tambahkan --data-dir.");
-        return;
-      }
-      var table = htm("table", null, box);
-      var tr = htm("tr", null, htm("thead", null, table));
-      htm("th", null, tr, "Berkas");
-      htm("th", "num", tr, "Ukuran");
-      var tb = htm("tbody", null, table);
-      rows.forEach(function (f) {
-        var r = htm("tr", "clk" + (F.file === f.name ? " on" : ""), tb);
-        htm("td", null, r, f.name);
-        htm("td", "num muted", r, (f.size / 1024).toFixed(0) + " KB");
-        r.addEventListener("click", function () {
-          F.file = f.name; F.opts = {}; F.hidden = new Set();
-          $("card-fchart").hidden = false;
-          loadFiles();
-          requestFileChart();
-        });
-      });
-    }).catch(function (e) {
-      box.textContent = "";
-      htm("p", "err", box, e.message);
-    });
-  }
-
-  function requestFileChart() {
-    var box = $("fchart");
-    box.classList.add("loading");
-    getJSON(API + "/api/cube" + qs({ file: F.file })).then(function (cube) {
-      F.cube = cube;
-      F.spec = BPSInfer.buildSpec(cube, specOpts(F.opts));
-      box.classList.remove("loading");
-      paint(F.spec, F, $("fchart-title"), $("fchart-sub"), $("fchart-chips"),
-        $("fcontrols"), $("fchart"), $("ftable"), requestFileChart, false);
-    }).catch(function (e) {
-      box.classList.remove("loading");
-      box.textContent = "";
-      htm("p", "err", box, e.message);
-    });
-  }
-
   // ---------------------------------------------------------------- settings
 
   var settingsWired = false;
@@ -930,22 +841,10 @@
     $("s-key-state").textContent = BPSApi.getKey()
       ? "Kunci tersimpan di browser ini (" + BPSApi.maskKey() + ")."
       : "Belum ada kunci di browser ini.";
-    $("s-domain-wrap").hidden = false;
-
-    if (MODE === "live") {
-      api("/api/settings").then(function (s) {
-        $("s-lang").value = s.lang;
-        $("s-status").textContent = s.key_set
-          ? "Layanan lokal aktif dengan kunci di .bps_key (" + s.key_masked + ")."
-          : "Layanan lokal aktif, tetapi .bps_key masih kosong.";
-        fillDomains(s.domain);
-      }).catch(function () { });
-    } else {
-      $("s-status").textContent = MODE === "direct"
-        ? "Browser mengambil data langsung dari webapi.bps.go.id."
-        : "Sedang memakai data tersimpan di repositori.";
-      if (BPSApi.getKey()) fillDomains(SET.domain);
-    }
+    $("s-status").textContent = MODE === "direct"
+      ? "Browser mengambil data langsung dari webapi.bps.go.id."
+      : "Sedang memakai sampel grafik yang tersimpan di repositori.";
+    if (BPSApi.getKey()) fillDomains(SET.domain);
 
     if (settingsWired) return;
     settingsWired = true;
@@ -957,16 +856,10 @@
       saveSettings();
       if (key) BPSApi.setKey(key);
       $("s-key").value = "";
-      if (MODE === "live") {
-        post("/api/settings", {
-          domain: SET.domain, lang: SET.lang, key: key
-        }).then(function () { CUBES = {}; loadSubjects(); loadSettings(); });
-      } else {
-        CUBES = {};
-        if (BPSApi.getKey() && MODE !== "direct") switchMode("direct");
-        else { applyMode(); showModeStatus(); loadSubjects(); }
-        loadSettings();
-      }
+      CUBES = {};
+      if (BPSApi.getKey() && MODE !== "direct") switchMode("direct");
+      else { applyMode(); showModeStatus(); loadSubjects(); }
+      loadSettings();
     });
 
     $("s-forget").addEventListener("click", function () {
@@ -979,13 +872,8 @@
 
     $("s-clear").addEventListener("click", function () {
       CUBES = {};
-      if (MODE === "live") {
-        post("/api/clear_cache").then(function (d) {
-          $("s-status").textContent = "Cache dikosongkan (" + (d.removed || 0) + " berkas).";
-        });
-      } else {
-        $("s-status").textContent = "Cache di browser dikosongkan.";
-      }
+      SUBJECT_CACHE = {};
+      $("s-status").textContent = "Cache di browser dikosongkan.";
     });
   }
 
@@ -993,8 +881,7 @@
 
   function fillDomains(current) {
     if (domainsLoaded) { $("s-domain").value = current || SET.domain; return; }
-    var p = MODE === "live" ? api("/api/domains") : BPSApi.getDomains();
-    p.then(function (ds) {
+    BPSApi.getDomains().then(function (ds) {
       domainsLoaded = true;
       var sel = $("s-domain");
       sel.textContent = "";
