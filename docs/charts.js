@@ -444,7 +444,7 @@
     } else {
       // bar family
       var groups = stacked || series.length === 1 ? 1 : series.length;
-      var slot = Math.min(MAX_BAR, (bandW - 10) / groups);
+      var slot = Math.max(1, Math.min(MAX_BAR, (bandW - 10 - GAP * (groups - 1)) / groups));
       var groupW = slot * groups + GAP * (groups - 1);
       series.forEach(function (s, si) {
         var col = isDiv ? null : colors[ctx.index(s)];
@@ -478,11 +478,13 @@
             d: barPath(x0, y0, slot, h, 4, dir),
             fill: isDiv ? (v >= 0 ? t.pos : t.neg) : col
           }, marks);
-          // value on the cap when there is room and few enough bars
-          if (!stacked && ctx.showValues && series.length === 1 &&
-              cats.length <= 14 && slot >= 18) {
+          /* Value on the cap. A label is centred on its bar, so the room it
+             may occupy is the distance to the next label: the band width for a
+             lone series, one bar pitch when grouped. */
+          if (!stacked && ctx.showValues && slot >= 12) {
             var label = fmtShort(v);
-            if (textWidth(label, 10) <= slot + bandW * 0.4) {
+            var room = series.length > 1 ? slot + GAP - 2 : bandW - 4;
+            if (textWidth(label, 10) <= room) {
               el("text", {
                 x: x0 + slot / 2, y: shown >= 0 ? y0 - 6 : y0 + h + 13,
                 "text-anchor": "middle", fill: t.ink2, "font-size": 10,
@@ -569,7 +571,9 @@
 
     var marks = el("g", {}, svg);
     var groups = grouped ? series.length : 1;
-    var slot = Math.min(MAX_BAR, (bandH - 8) / groups);
+    // the gaps between bars have to come out of the band too, or the last bar
+    // of one category overlaps the first bar of the next
+    var slot = Math.max(1, Math.min(MAX_BAR, (bandH - 8 - GAP * (groups - 1)) / groups));
     var groupH = slot * groups + GAP * (groups - 1);
     var zero = scaleX(0);
 
@@ -592,17 +596,20 @@
           d: barPath(v >= 0 ? zero : zero, y0, slot, len, 4, dir),
           fill: isDiv ? (v >= 0 ? t.pos : t.neg) : colors[ctx.index(s)]
         }, marks);
-        // Tip values only on a single series, only when the rows are tall
-        // enough for the text, and only where they fit between the bar end and
-        // the frame -- never back over the category gutter.
-        if (!grouped && ctx.showValues && bandH >= 16) {
+        /* Tip values, on grouped bars too: each series now has its own row, so
+           the limit is whether consecutive labels have vertical room, not
+           whether the chart is grouped. They are still skipped where the text
+           would not fit between the bar end and the frame, or would fall back
+           over the category gutter. */
+        var labelSpace = grouped ? slot + GAP : bandH;
+        if (ctx.showValues && labelSpace >= 12) {
           var label = fmtShort(v);
           var lx = v >= 0 ? zero + len + 6 : zero - len - 6;
           var lw = textWidth(label, 10);
           if ((v >= 0 ? lx + lw : lx) < ctx.width - 2 &&
               (v >= 0 ? lx : lx - lw) > plot.left + 4) {
             el("text", {
-              x: lx, y: cy + 4, "text-anchor": v >= 0 ? "start" : "end",
+              x: lx, y: y0 + slot / 2 + 3.5, "text-anchor": v >= 0 ? "start" : "end",
               fill: t.ink2, "font-size": 10, "font-family": FONT,
               "font-variant-numeric": "tabular-nums"
             }, marks).textContent = label;
