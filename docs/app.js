@@ -741,6 +741,12 @@
     Object.keys(spec.roles.picks || {}).forEach(function (d) {
       var dim = spec.dims[d];
       if (!dim || !dim.n || dim.degenerate) return;
+      /* A filter with one member offers no choice: "Periode: 2026" beside
+         "Tahun: 2026" is the same fact twice, and summing or averaging a
+         single member returns the member. The chart's subtitle already names
+         what is being held fixed, so the control only appears when there is
+         something to pick -- quarters, months, or several years at once. */
+      if (dim.n < 2) return;
       var opts = [];
       if (d !== "time") {
         if (dim.additive) opts.push({ value: "__sum__", label: "▣ Jumlah semua" });
