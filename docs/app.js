@@ -624,6 +624,7 @@
       x: opts.x, series: opts.series, chart: opts.chart,
       top: opts.top, sort: opts.sort, includeTotals: !!opts.include_totals,
       seriesPick: opts.series_pick || [],
+      regionLevel: opts.region_level,
       pick: {
         vervar: opts.pick_vervar, turvar: opts.pick_turvar, time: opts.pick_time
       }
@@ -764,6 +765,20 @@
         st.opts["pick_" + d] = v; onChange();
       });
     });
+
+    /* Variables that list provinces and their own regencies together get a
+       level switch: mixing them on one axis double-counts, so one level is
+       shown at a time. */
+    if (spec.region) {
+      select(box, "Tingkat wilayah", [
+        { value: "kabkota", label: "Kabupaten/Kota (" + spec.region.kabkota + ")" },
+        { value: "provinsi", label: "Provinsi (" + spec.region.provinsi + ")" },
+        { value: "all", label: "Semua tingkat (tumpang tindih)" }
+      ], spec.region.level, function (v) {
+        st.opts.region_level = v; st.opts.series_pick = [];
+        st.hidden.clear(); onChange();
+      });
+    }
 
     seriesPicker(spec, st, box, onChange);
 

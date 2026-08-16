@@ -73,6 +73,21 @@
 
   function isTotalLabel(s) { return !!s && TOTAL_RE.test(String(s).trim()); }
 
+  /* Administrative level of a region member, from the BPS wilayah code:
+     "0000" is the country, "1100"/"3100" (ending in 00) a province, "1101" a
+     regency or city. Some variables list provinces and their own regencies in
+     one dimension -- ranking those together double-counts, the same mistake as
+     putting INDONESIA beside the provinces, one level down. */
+  function regionLevel(id) {
+    var s = String(id == null ? "" : id).trim();
+    if (!/^\d{4}$/.test(s)) return "";
+    if (s === "0000") return "nasional";
+    return /00$/.test(s) ? "provinsi" : "kabkota";
+  }
+
+  var LEVEL_LABELS = { provinsi: "Provinsi", kabkota: "Kabupaten/Kota",
+                       nasional: "Nasional" };
+
   /* The bare sub-period name of a time member ("Tahunan", "Januari", "TW I").
      A producer may supply it as a 4th element; otherwise it is the label with
      its year prefix removed, since periods are stored year-first ("2022
@@ -483,6 +498,41 @@
         "untuk menampilkannya.");
     }
 
+    /* Mixed administrative levels: keep one level on the axis, since a province
+       already contains its regencies. The level with more members is the
+       variable's evident subject and is used unless the reader asks otherwise;
+       "all" is available but deliberately not the default. */
+    var region = null;
+    var regionRole = xDim === "vervar" ? "x" : (seriesDim === "vervar" ? "series" : "");
+    if (regionRole) {
+      var pool = regionRole === "x" ? xMembers : seriesMembers;
+      var counts = { provinsi: 0, kabkota: 0 };
+      pool.forEach(function (m) {
+        var lv = regionLevel(m.id);
+        if (counts[lv] !== undefined) counts[lv]++;
+      });
+      if (counts.provinsi >= 2 && counts.kabkota >= 2) {
+        var want = opts.regionLevel;
+        if (want !== "provinsi" && want !== "kabkota" && want !== "all") {
+          want = counts.kabkota >= counts.provinsi ? "kabkota" : "provinsi";
+        }
+        region = { level: want, provinsi: counts.provinsi, kabkota: counts.kabkota };
+        if (want !== "all") {
+          var kept = pool.filter(function (m) { return regionLevel(m.id) === want; });
+          if (kept.length >= 2) {
+            if (regionRole === "x") xMembers = kept; else seriesMembers = kept;
+            notes.push("Data memuat dua tingkat wilayah (" + counts.provinsi +
+              " provinsi dan " + counts.kabkota + " kabupaten/kota). Menampilkan " +
+              LEVEL_LABELS[want].toLowerCase() + " saja agar tidak tercampur — " +
+              "ganti lewat \"Tingkat wilayah\".");
+          }
+        } else {
+          notes.push("Menampilkan provinsi dan kabupaten/kota bersama-sama; " +
+            "angkanya tumpang tindih karena provinsi sudah mencakup kabupaten/kotanya.");
+        }
+      }
+    }
+
     /* An explicit choice of series members. Colour only stretches to 8 slots,
        so a 91-city variable otherwise shows the 8 largest and gives the reader
        no say in which. Applied before the grid is trimmed and before the cap,
@@ -559,10 +609,11 @@
     // The time axis is never truncated -- a chopped time series lies about the
     // trend; a category axis with hundreds of members is simply unreadable.
     if (xDim !== "time" && xMembers.length > top && chart !== "histogram") {
+      // "of N" counts what is actually eligible, i.e. after roll-ups and any
+      // other administrative level have been taken out
       truncated = { shown: top, total: xMembers.length };
       if (chart === "heatmap") {
         xMembers.sort(function (a, b) { return xTotal(b) - xTotal(a); });
-        truncated.total = dims[xDim].members.length;
       }
       xMembers = xMembers.slice(0, top);
     }
@@ -653,6 +704,7 @@
       y: { label: dims.unit || "Nilai" },
       series_dim: seriesDim, series_label: DIM_LABELS[seriesDim] || "",
       // what the series picker needs: how many exist, and which are chosen
+      region: region,                       // {level, provinsi, kabkota} or null
       series_total: seriesDim && dims[seriesDim] ? dims[seriesDim].n : 0,
       series_pick: pickedSeries ? seriesPick : [],
       series_max: MAX_SERIES,
