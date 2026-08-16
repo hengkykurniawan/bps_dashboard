@@ -177,7 +177,10 @@
         var short = shortPeriod(clean(tt.label));
         var label = short ? clean(ty.label) + " " + short : clean(ty.label);
         var full = short ? clean(ty.label) + " " + clean(tt.label) : clean(ty.label);
-        acc._p[id] = { label: label, full: full,
+        // Keep the bare sub-period name ("Januari", "Triwulan I", "Tahunan")
+        // alongside the year-prefixed label: the chart layer needs it to spot a
+        // period roll-up, which "2022 Tahunan" would hide.
+        acc._p[id] = { label: label, full: full, sub: clean(tt.label),
           sort: [parseInt(ty.val, 10) || 0, parseInt(tt.val, 10) || 0] };
         acc._porder.push(id);
       });
@@ -216,7 +219,7 @@
     var pidx = {};
     acc.time = acc._porder.map(function (id, i) {
       pidx[id] = i;
-      return [id, acc._p[id].label, acc._p[id].full];
+      return [id, acc._p[id].label, acc._p[id].full, acc._p[id].sub];
     });
 
     /* BPS declares every member of every dimension in the response, including

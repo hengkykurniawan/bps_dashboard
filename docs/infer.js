@@ -104,7 +104,15 @@
         var label = dim === "time" ? m[1] : (m[1] || "");
         return {
           id: m[0], label: label, full: dim === "time" ? (m[2] || label) : label,
-          isTotal: isTotalLabel(label), magnitude: mag[dim][i]
+          // labelTotal: the NAME says roll-up ("Tahunan", "Jumlah", "INDONESIA").
+          // A period label is year-prefixed ("2022 Tahunan"), so test its bare
+          // sub-period name (m[3]) instead. isTotal may additionally be set
+          // later by the numeric heuristic.
+          labelTotal: dim === "time"
+            ? isTotalLabel(m[3] || "") : isTotalLabel(label),
+          isTotal: dim === "time"
+            ? isTotalLabel(m[3] || "") : isTotalLabel(label),
+          magnitude: mag[dim][i]
         };
       });
       out[dim] = {
@@ -157,7 +165,12 @@
   function defaultPick(dims, dim) {
     var ms = dims[dim].members;
     if (!ms.length) return null;
-    if (dim === "time") return ms[ms.length - 1].id;      // latest period
+    if (dim === "time") {                                 // latest real period
+      for (var t = ms.length - 1; t >= 0; t--) {
+        if (!ms[t].labelTotal) return ms[t].id;           // skip "Tahunan" etc.
+      }
+      return ms[ms.length - 1].id;                        // all are roll-ups
+    }
     var real = ms.filter(function (m) { return !m.isTotal; });
     if (!real.length) real = ms;
     return real.reduce(function (a, b) {
@@ -416,19 +429,33 @@
     var hadSeriesTotal = seriesMembers.length > 2 &&
       seriesMembers.some(function (m) { return m.isTotal; });
 
-    var notes = [], dropped = [];
+    var notes = [], dropped = [], droppedTime = [];
     var includeTotals = !!opts.includeTotals;
+    // A period roll-up ("Tahunan", "Jan-Des", "Kumulatif") must never sit on the
+    // same axis as the months/quarters it summarises — it is not a point in time
+    // and its magnitude dwarfs them. For periods trust ONLY the label: a month
+    // can legitimately equal the sum of the others, so the numeric heuristic
+    // would drop real data.
+    var isRollup = function (dim) {
+      return dim === "time"
+        ? function (m) { return !!m.labelTotal; }
+        : function (m) { return !!m.isTotal; };
+    };
     if (!includeTotals) {
-      var sParts = seriesMembers.filter(function (m) { return !m.isTotal; });
+      var sRollup = isRollup(seriesDim);
+      var sParts = seriesMembers.filter(function (m) { return !sRollup(m); });
       if (sParts.length >= 2 && sParts.length < seriesMembers.length) {
-        seriesMembers.filter(function (m) { return m.isTotal; })
-          .forEach(function (m) { dropped.push(m.label); });
+        seriesMembers.filter(sRollup).forEach(function (m) {
+          (seriesDim === "time" ? droppedTime : dropped).push(m.label);
+        });
         seriesMembers = sParts;
       }
-      var xParts = xMembers.filter(function (m) { return !m.isTotal; });
-      if (xParts.length >= 2 && xParts.length < xMembers.length && xDim !== "time") {
-        xMembers.filter(function (m) { return m.isTotal; })
-          .forEach(function (m) { dropped.push(m.label); });
+      var xRollup = isRollup(xDim);
+      var xParts = xMembers.filter(function (m) { return !xRollup(m); });
+      if (xParts.length >= 2 && xParts.length < xMembers.length) {
+        xMembers.filter(xRollup).forEach(function (m) {
+          (xDim === "time" ? droppedTime : dropped).push(m.label);
+        });
         xMembers = xParts;
       }
     }
@@ -436,6 +463,12 @@
       var uniq = dropped.filter(function (v, i, a) { return a.indexOf(v) === i; }).sort();
       notes.push("Baris agregat (" + uniq.join(", ") + ") dikeluarkan agar tidak " +
         "dihitung dua kali — aktifkan \"sertakan total\" untuk menampilkannya.");
+    }
+    if (droppedTime.length) {
+      var uniqT = droppedTime.filter(function (v, i, a) { return a.indexOf(v) === i; }).sort();
+      notes.push("Periode agregat (" + uniqT.join(", ") + ") dikeluarkan karena " +
+        "merangkum periode lain di sumbu yang sama — aktifkan \"sertakan total\" " +
+        "untuk menampilkannya.");
     }
 
     var keepS = {}; seriesMembers.forEach(function (m) { keepS[m.id] = 1; });
