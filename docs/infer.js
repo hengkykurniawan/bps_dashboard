@@ -73,6 +73,18 @@
 
   function isTotalLabel(s) { return !!s && TOTAL_RE.test(String(s).trim()); }
 
+  /* The bare sub-period name of a time member ("Tahunan", "Januari", "TW I").
+     A producer may supply it as a 4th element; otherwise it is the label with
+     its year prefix removed, since periods are stored year-first ("2022
+     Tahunan"). An annual series has no sub-period at all ("2022"), which
+     correctly yields "" -- those must never be treated as roll-ups. */
+  function periodName(m) {
+    if (m[3]) return String(m[3]).trim();
+    var full = String(m[2] || m[1] || "");
+    var hit = /^\s*\d{4}\s+(.+)$/.exec(full);
+    return hit ? hit[1].trim() : "";
+  }
+
   // ---------------------------------------------------------------- summarize
 
   function summarize(cube) {
@@ -109,9 +121,9 @@
           // sub-period name (m[3]) instead. isTotal may additionally be set
           // later by the numeric heuristic.
           labelTotal: dim === "time"
-            ? isTotalLabel(m[3] || "") : isTotalLabel(label),
+            ? isTotalLabel(periodName(m)) : isTotalLabel(label),
           isTotal: dim === "time"
-            ? isTotalLabel(m[3] || "") : isTotalLabel(label),
+            ? isTotalLabel(periodName(m)) : isTotalLabel(label),
           magnitude: mag[dim][i]
         };
       });
@@ -628,7 +640,10 @@
       stacked: !!STACKED[chart], percent: /_100$/.test(chart),
       roles: { x: xDim, series: seriesDim, picks: picks },
       truncated: truncated,
-      totals_dropped: dropped.filter(function (v, i, a) { return a.indexOf(v) === i; }),
+      // period roll-ups count too: the note tells the reader to tick "sertakan
+      // total", so the control has to be there when only a period was dropped
+      totals_dropped: dropped.concat(droppedTime)
+        .filter(function (v, i, a) { return a.indexOf(v) === i; }),
       include_totals: includeTotals,
       notes: notes,
       alternatives: alternativesFor(autoChart, xDim, nXAll, nSeriesAll)
