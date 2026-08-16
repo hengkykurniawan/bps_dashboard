@@ -483,6 +483,19 @@
         "untuk menampilkannya.");
     }
 
+    /* An explicit choice of series members. Colour only stretches to 8 slots,
+       so a 91-city variable otherwise shows the 8 largest and gives the reader
+       no say in which. Applied before the grid is trimmed and before the cap,
+       so the selection wins. */
+    var seriesPick = (opts.seriesPick || []).map(String).filter(Boolean);
+    var pickedSeries = false;
+    if (seriesDim && seriesPick.length) {
+      var want = {};
+      seriesPick.forEach(function (id) { want[id] = 1; });
+      var chosen = seriesMembers.filter(function (m) { return want[m.id]; });
+      if (chosen.length) { seriesMembers = chosen; pickedSeries = true; }
+    }
+
     var keepS = {}; seriesMembers.forEach(function (m) { keepS[m.id] = 1; });
     var keepX = {}; xMembers.forEach(function (m) { keepX[m.id] = 1; });
     var g2 = {};
@@ -568,8 +581,11 @@
     } else if (seriesMembers.length > MAX_SERIES) {
       seriesMembers.sort(function (a, b) { return magOf(b) - magOf(a); });
       seriesMembers = seriesMembers.slice(0, MAX_SERIES);
-      notes.push("Hanya " + MAX_SERIES + " seri terbesar diberi warna; gunakan " +
-        "heatmap atau panel kecil untuk semuanya.");
+      notes.push(pickedSeries
+        ? "Hanya " + MAX_SERIES + " dari pilihan Anda yang diberi warna."
+        : "Menampilkan " + MAX_SERIES + " seri terbesar dari " +
+          dims[seriesDim].n + " — pilih sendiri lewat \"" +
+          DIM_LABELS[seriesDim] + "\", atau gunakan heatmap/panel kecil untuk semuanya.");
     }
 
     // --- assemble
@@ -636,6 +652,10 @@
       },
       y: { label: dims.unit || "Nilai" },
       series_dim: seriesDim, series_label: DIM_LABELS[seriesDim] || "",
+      // what the series picker needs: how many exist, and which are chosen
+      series_total: seriesDim && dims[seriesDim] ? dims[seriesDim].n : 0,
+      series_pick: pickedSeries ? seriesPick : [],
+      series_max: MAX_SERIES,
       series: series, color: color,
       stacked: !!STACKED[chart], percent: /_100$/.test(chart),
       roles: { x: xDim, series: seriesDim, picks: picks },

@@ -308,6 +308,7 @@
     };
   }
   var S = freshState();
+  var pickerState = { open: false, q: "" };   // survives control rebuilds
 
   function redraw() {
     if (S.spec) drawInto($("chart"), S.spec, S.hidden, S.opts.show_values !== false);
@@ -599,6 +600,7 @@
   function pickVar(v) {
     S.varId = v.var_id; S.varTitle = v.title; S.varRec = v;
     S.opts = {}; S.hidden = new Set();
+    pickerState = { open: false, q: "" };      // a new variable, a new list
     renderVars();
     $("card-chart").hidden = false;
     $("chart-title").textContent = v.title;
@@ -621,6 +623,7 @@
     return {
       x: opts.x, series: opts.series, chart: opts.chart,
       top: opts.top, sort: opts.sort, includeTotals: !!opts.include_totals,
+      seriesPick: opts.series_pick || [],
       pick: {
         vervar: opts.pick_vervar, turvar: opts.pick_turvar, time: opts.pick_time
       }
@@ -729,12 +732,14 @@
     });
     if (dimOpts.length > 1) {
       select(box, "Sumbu X", dimOpts, spec.roles.x, function (v) {
-        st.opts.x = v; st.opts.series = null; st.hidden.clear(); onChange();
+        st.opts.x = v; st.opts.series = null; st.opts.series_pick = [];
+        st.hidden.clear(); onChange();
       });
       var sopts = [{ value: "", label: "— tanpa seri —" }].concat(
         dimOpts.filter(function (o) { return o.value !== spec.roles.x; }));
       select(box, "Seri (warna)", sopts, spec.roles.series || "", function (v) {
-        st.opts.series = v || "none"; st.hidden.clear(); onChange();
+        st.opts.series = v || "none"; st.opts.series_pick = [];
+        st.hidden.clear(); onChange();
       });
     }
 
@@ -759,6 +764,8 @@
         st.opts["pick_" + d] = v; onChange();
       });
     });
+
+    seriesPicker(spec, st, box, onChange);
 
     var vf = field(box, "Label nilai");
     var vlab = htm("label", "checkline", vf);
@@ -797,6 +804,91 @@
           return { value: n, label: n === total ? "semua (" + n + ")" : n + " teratas" };
         }), st.opts.top || 20, function (v) { st.opts.top = v; onChange(); });
       }
+    }
+  }
+
+  /* Which members of the series dimension to plot. Colour caps the chart at
+     eight, and with 91 cities (or 514 regencies) the reader needs to say which
+     eight rather than being handed the largest. Only shown when there are more
+     members than slots -- otherwise everything is already on screen. */
+  function seriesPicker(spec, st, box, onChange) {
+    var dim = spec.series_dim && spec.dims[spec.series_dim];
+    var max = spec.series_max || 8;
+    if (!dim || !dim.n || dim.n <= spec.series.length) return;
+
+    var chosen = (st.opts.series_pick || []).slice();
+    var f = field(box, dim.label);
+    var det = htm("details", "picker", f);
+    // Every pick redraws the chart, which rebuilds this control. Without
+    // carrying the open state and the search term across that rebuild, ticking
+    // one city closes the panel and clears the search -- picking several in a
+    // row would be unusable.
+    det.open = !!pickerState.open;
+    var sum = htm("summary", null, det);
+    function summaryText() {
+      sum.textContent = chosen.length
+        ? chosen.length + " dipilih dari " + dim.n
+        : "8 terbesar dari " + dim.n + " — pilih…";
+    }
+    summaryText();
+
+    var panel = htm("div", "picker-panel", det);
+    var tools = htm("div", "picker-tools", panel);
+    var q = htm("input", null, tools);
+    q.type = "search";
+    q.placeholder = "cari " + dim.label.toLowerCase();
+    q.value = pickerState.q || "";
+    var clear = htm("button", "linkish", tools, "kosongkan");
+    clear.type = "button";
+    var listBox = htm("div", "picker-list", panel);
+    var hint = htm("p", "viz-note", panel, "Maksimal " + max + " seri berwarna.");
+
+    function apply() {
+      st.opts.series_pick = chosen.slice();
+      summaryText();
+      onChange();
+    }
+
+    function render() {
+      var term = q.value.toLowerCase();
+      listBox.textContent = "";
+      var shown = 0;
+      dim.members.forEach(function (m) {
+        if (term && m.label.toLowerCase().indexOf(term) < 0) return;
+        if (shown >= 300) return;                 // search narrows the rest
+        shown++;
+        var row = htm("label", "picker-row", listBox);
+        var cb = htm("input", null, row);
+        cb.type = "checkbox";
+        cb.checked = chosen.indexOf(m.id) >= 0;
+        cb.disabled = !cb.checked && chosen.length >= max;
+        htm("span", null, row, m.label);
+        cb.addEventListener("change", function () {
+          var at = chosen.indexOf(m.id);
+          if (cb.checked && at < 0) chosen.push(m.id);
+          else if (!cb.checked && at >= 0) chosen.splice(at, 1);
+          render();                                // refresh the disabled state
+          apply();
+        });
+      });
+      if (!shown) htm("p", "muted", listBox, "Tidak ada yang cocok.");
+      else if (dim.members.length > shown) {
+        htm("p", "viz-note", listBox, "Menampilkan " + shown + " — persempit dengan pencarian.");
+      }
+    }
+
+    q.addEventListener("input", function () { pickerState.q = q.value; render(); });
+    q.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); });
+    clear.addEventListener("click", function () { chosen = []; render(); apply(); });
+    det.addEventListener("toggle", function () {
+      pickerState.open = det.open;
+      if (det.open) render();
+    });
+    render();
+    // the rebuild dropped focus mid-search; put it back where the reader was
+    if (det.open && q.value) {
+      q.focus();
+      q.setSelectionRange(q.value.length, q.value.length);
     }
   }
 

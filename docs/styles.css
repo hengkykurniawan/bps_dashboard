@@ -281,6 +281,32 @@ button.linkish {
 
 /* ---------------------------------------------------------------- chips & badges */
 
+/* series picker: a dropdown panel with search, for dimensions with far more
+   members than the eight colour slots */
+.picker { position: relative; }
+.picker > summary {
+  list-style: none; cursor: pointer; font-size: 13px; min-width: 200px;
+  padding: 8px 11px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--page); color: var(--text-primary);
+}
+.picker > summary::-webkit-details-marker { display: none; }
+.picker > summary::after { content: " ▾"; color: var(--text-muted); }
+.picker[open] > summary { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.picker-panel {
+  position: absolute; z-index: 8; margin-top: 6px; width: 320px; max-width: 84vw;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: var(--shadow-lift); padding: 11px;
+}
+.picker-tools { display: flex; gap: 8px; align-items: center; }
+.picker-tools input { flex: 1; min-width: 0; }
+.picker-list { max-height: 260px; overflow: auto; margin-top: 9px; }
+.picker-row {
+  display: flex; gap: 8px; align-items: center; cursor: pointer;
+  padding: 4px 6px; border-radius: 8px; font-size: 12.5px;
+}
+.picker-row:hover { background: var(--hover); }
+.picker-row input:disabled + span { opacity: .45; }
+
 .chips { display: flex; gap: 7px; flex-wrap: wrap; margin: 8px 0 0; align-items: center; }
 .chip {
   display: inline-block; font-size: 11.5px; color: var(--text-secondary);
